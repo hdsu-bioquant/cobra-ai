@@ -53,8 +53,7 @@ class Ontobj():
         'graph', 
         'desc_genes', 
         'masks', 
-        'sem_sim', 
-        'data'
+        'sem_sim'
         )
 
     def __init__(self, description=None):
