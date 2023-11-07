@@ -56,7 +56,7 @@ class Ontobj():
         'sem_sim'
         )
 
-    def __init__(self, description=None):
+    def __init__(self, description: str=None):
         super(Ontobj, self).__init__()
 
         self.description = description
@@ -71,7 +71,7 @@ class Ontobj():
         self.masks = {}
         self.sem_sim = {}
 
-    def _dag_annot(self, dag, gene_annot, filter_id=None):
+    def _dag_annot(self, dag: dict, gene_annot: pd.DataFrame, filter_id: str=None):
 
         """
         Creates annotation dataframe from imported obo file.
@@ -123,7 +123,7 @@ class Ontobj():
         return annot
 
 
-    def initialize_dag(self, obo, gene_annot, filter_id = None):
+    def initialize_dag(self, obo: str, gene_annot: str, filter_id: str = None):
 
         """
         Dag is initialized from obo file and annotation.
@@ -220,7 +220,7 @@ class Ontobj():
         self.graph_base = term_dict
 
 
-    def trim_dag(self, top_thresh=1000, bottom_thresh=30):
+    def trim_dag(self, top_thresh: int=1000, bottom_thresh: int=30):
 
         """
         DAG is trimmed based on user-defined thresholds.
@@ -321,7 +321,7 @@ class Ontobj():
         self.desc_genes[str(top_thresh) + '_' + str(bottom_thresh)] = desc_genes
 
 
-    def create_masks(self, top_thresh=1000, bottom_thresh=30):
+    def create_masks(self, top_thresh: int=1000, bottom_thresh: int=30):
 
         """
         Creation of masks to initialize the wiring in the latent space and decoder of OntoVAE.
@@ -379,7 +379,7 @@ class Ontobj():
         return masks
 
 
-    def compute_wsem_sim(self, obo, top_thresh=1000, bottom_thresh=30):
+    def compute_wsem_sim(self, obo: str, top_thresh: int=1000, bottom_thresh: int=30):
 
         """
         Wang semantic similarities between a list of ontology terms are computed.
@@ -408,7 +408,7 @@ class Ontobj():
         self.sem_sim[str(top_thresh) + '_' + str(bottom_thresh)] = wsem_sim
 
     
-    def extract_annot(self, top_thresh=1000, bottom_thresh=30):
+    def extract_annot(self, top_thresh: int=1000, bottom_thresh: int=30):
         """
         Helper function to extract table from annot slot.
 
@@ -421,7 +421,7 @@ class Ontobj():
         """
         return self.annot[str(top_thresh) + '_' + str(bottom_thresh)].copy()
 
-    def extract_genes(self, top_thresh=1000, bottom_thresh=30):
+    def extract_genes(self, top_thresh: int=1000, bottom_thresh: int=30):
         """
         Helper function to extract list from genes slot.
 
@@ -434,7 +434,7 @@ class Ontobj():
         """
         return self.genes[str(top_thresh) + '_' + str(bottom_thresh)].copy()
 
-    def extract_masks(self, top_thresh=1000, bottom_thresh=30):
+    def extract_masks(self, top_thresh: int=1000, bottom_thresh: int=30):
         """
         Helper function to extract masks from masks slot.
 
@@ -447,7 +447,7 @@ class Ontobj():
         """
         return self.masks[str(top_thresh) + '_' + str(bottom_thresh)].copy()
     
-    def remove_link(self, term, gene, top_thresh=1000, bottom_thresh=30):
+    def remove_link(self, term: str, gene: str, top_thresh: int=1000, bottom_thresh: int=30):
         """
         Modifies the masks slot by removing the link between a gene and a term.
 
@@ -479,7 +479,7 @@ class Ontobj():
         self.masks[str(top_thresh) + '_' + str(bottom_thresh)][-1][gene_idx, start_point + term_idx] = 0
 
 
-    def save(self, path=str):
+    def save(self, path: str):
         """
         Function to save the ontobj as a dict
         """
@@ -499,7 +499,7 @@ class Ontobj():
         with open(path, 'w') as fp:
             json.dump(ontobj, fp)
     
-    def load(self, path=str):
+    def load(self, path: str):
         """
         Helper function to load existing ontobj
         """
