@@ -1,34 +1,60 @@
 import numpy as np
 import torch
 import torch.nn as nn
+from torch.nn.functional import one_hot
+from typing import Iterable
 
 """Encoder module"""
 
 class Encoder(nn.Module):
     """
     This class constructs an Encoder module for a variational autoencoder.
+    Inspired by SCVI FCLayers class.
 
     Parameters
     ----------
     in_features
         # of features that are used as input
-    layer_dims
-        list giving the dimensions of the hidden layers
     latent_dim 
         latent dimension
+    n_cat_list
+        A list containing, for each category of interest,
+        the number of categories. Each category will be
+        included using a one-hot encoding.
+    layer_dims
+        list giving the dimensions of the hidden layers
+    use_batch_norm
+        Whether to have `BatchNorm` layers or not
+    use_layer_norm
+        Whether to have `LayerNorm` layers or not
+    use_activation
+        Whether to have layer activation or not
+    activation_fn
+        Which activation function to use
+    bias
+        Whether to learn bias in linear layers or not
+    inject_covariates
+        Whether to inject covariates in each layer (True), or just the first (False).
     drop
-        dropout rate, default is 0.2
+        dropout rate
     z_drop
-        dropout rate for latent space, default is 0.5
+        dropout rate for latent space
     """
 
     def __init__(self, 
                  in_features: int, 
                  latent_dim: int, 
+                 n_cat_list: Iterable[int] = None,
                  layer_dims: list = [512], 
+                 use_batch_norm: bool = True,
+                 use_layer_norm: bool = False,
+                 use_activation: bool = True,
+                 activation_fn: nn.Module = nn.ReLU,
+                 bias: bool = True,
+                 inject_covariates: bool = True,
                  drop: float = 0.2, 
                  z_drop: float = 0.5):
-        super(Encoder, self).__init__()
+        super().__init__()
 
         self.in_features = in_features
         self.layer_dims = layer_dims
@@ -37,43 +63,87 @@ class Encoder(nn.Module):
         self.drop = drop
         self.z_drop = z_drop
 
+        if n_cat_list is not None:
+            # n_cat = 1 will be ignored
+            self.n_cat_list = [n_cat if n_cat > 1 else 0 for n_cat in n_cat_list]
+        else:
+            self.n_cat_list = []
+
+        self.inject_covariates = inject_covariates
+        self.cat_dim = sum(self.n_cat_list)
+
         self.encoder = nn.ModuleList(
             [
                 nn.Sequential(
-                    nn.Linear(self.in_features, self.layer_dims[0]),
-                    nn.BatchNorm1d(self.layer_dims[0]),
-                    nn.Dropout(p=self.drop),
-                    nn.ReLU()
+                    nn.Linear(self.in_features + self.cat_dim, self.layer_dims[0], bias=bias),
+                    nn.BatchNorm1d(self.layer_dims[0]) if use_batch_norm else None,
+                    nn.LayerNorm(self.layer_dims[0]) if use_layer_norm else None,
+                    activation_fn() if use_activation else None,
+                    nn.Dropout(p=self.drop) if self.drop > 0 else None
                 )
             ] +
 
-            [self.build_block(x[0], x[1]) for x in self.layer_nums] 
+            [build_block(ins = x[0],
+                outs = x[1],
+                cat_dim = self.cat_dim,
+                use_batch_norm = use_batch_norm,
+                use_layer_norm = use_layer_norm,
+                use_activation = use_activation,
+                activation_fn = activation_fn,
+                bias = bias,
+                inject_covariates = inject_covariates,
+                drop = self.drop
+            ) for x in self.layer_nums] 
         )
 
         self.mu = nn.Sequential(
-            nn.Linear(self.layer_dims[-1], self.latent_dim),
-            nn.Dropout(p=self.z_drop)
+            nn.Linear(self.layer_dims[-1] + self.cat_dim * inject_covariates, self.latent_dim),
+            nn.Dropout(p=self.z_drop) if self.z_drop > 0 else None
         )
 
         self.logvar = nn.Sequential(
-            nn.Linear(self.layer_dims[-1], self.latent_dim),
-            nn.Dropout(p=self.z_drop)
+            nn.Linear(self.layer_dims[-1] + self.cat_dim * inject_covariates, self.latent_dim),
+            nn.Dropout(p=self.z_drop) if self.z_drop > 0 else None
         )
 
-    def build_block(self, ins, outs):
-        return nn.Sequential(
-            nn.Linear(ins, outs),
-            nn.BatchNorm1d(outs),
-            nn.Dropout(p=self.drop),
-            nn.ReLU()
-        )
 
-    def forward(self, x):
+    def forward(self, x: torch.tensor, cat_list: Iterable[torch.tensor]):
+        """
+        Forward computation on minibatch of samples.
+        
+        Parameters
+        ----------
+        x
+            torch.tensor of shape (minibatch, in_features)
+        cat_list
+            Iterable of torch.tensors containing the category memberships
+            shape of each tensor is (minibatch, 1)
+        """
 
-        # encoding
-        c = x
-        for layer in self.encoder:
-            c = layer(c)
+        if self.cat_dim > 0:
+            categs = []
+            for n_cat, cat in zip(self.n_cat_list, cat_list):
+                if n_cat > 1:
+                    categs.append(one_hot(cat.long(), n_cat).squeeze())
+            categs = torch.hstack(categs)
+            c = torch.hstack((x, categs))
+        else:
+            c = x
+
+        for i, block in enumerate(self.encoder):
+            if i == 0:
+                for layer in block:
+                    if layer is not None:
+                        c = layer(c)
+            else:
+                for layer in block:
+                    if self.cat_dim > 0 and self.inject_covariates and isinstance(layer, nn.Linear):
+                        c = layer(torch.hstack((c, categs)))
+                    else:
+                        c = layer(c)
+    
+        if self.cat_dim > 0 and self.inject_covariates :
+            c = torch.hstack((c, categs))
 
         mu = self.mu(c)
         log_var = self.logvar(c)
@@ -98,6 +168,26 @@ class OntoDecoder(nn.Module):
         matrix for each layer transition, that determines which weights to zero out
     latent_dim
         latent dimension
+    neuronnum
+        number of neurons to use per term
+    n_cat_list
+        A list containing, for each category of interest,
+        the number of categories. Each category will be
+        included using a one-hot encoding.
+    use_batch_norm
+        Whether to have `BatchNorm` layers or not
+    use_layer_norm
+        Whether to have `LayerNorm` layers or not
+    use_activation
+        Whether to have layer activation or not
+    activation_fn
+        Which activation function to use
+    bias
+        Whether to learn bias in linear layers or not
+    inject_covariates
+        Whether to inject covariates in each layer (True), or just the last (False).
+    drop
+        dropout rate
     """ 
 
     def __init__(self, 
@@ -105,8 +195,16 @@ class OntoDecoder(nn.Module):
                  layer_dims: list, 
                  mask_list: list, 
                  latent_dim: int, 
-                 neuronnum: int = 3):
-        super(OntoDecoder, self).__init__()
+                 neuronnum: int = 3,
+                 n_cat_list: Iterable[int] = None,
+                 use_batch_norm: bool = False,
+                 use_layer_norm: bool = False,
+                 use_activation: bool = False,
+                 activation_fn: nn.Module = nn.ReLU,
+                 bias: bool = True,
+                 inject_covariates: bool = False,
+                 drop: float = 0):
+        super().__init__()
 
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.in_features = in_features
@@ -119,19 +217,47 @@ class OntoDecoder(nn.Module):
             self.masks.append(m.to(self.device))
         self.masks.append(mask_list[-1].repeat_interleave(neuronnum, dim=1).to(self.device))
         self.latent_dim = latent_dim
+        self.drop = drop
 
-        # Decoder
+        if n_cat_list is not None:
+            # n_cat = 1 will be ignored
+            self.n_cat_list = [n_cat if n_cat > 1 else 0 for n_cat in n_cat_list]
+        else:
+            self.n_cat_list = []
+
+        self.inject_covariates = inject_covariates
+        self.cat_dim = sum(self.n_cat_list)
+
         self.decoder = nn.ModuleList(
 
-            [self.build_block(x[0], x[1]) for x in self.layer_shapes[:-1]] +
+            [build_block(ins = x[0],
+                outs = x[1],
+                cat_dim = self.cat_dim,
+                use_batch_norm = use_batch_norm,
+                use_layer_norm = use_layer_norm,
+                use_activation = use_activation,
+                activation_fn = activation_fn,
+                bias = bias,
+                inject_covariates = inject_covariates,
+                drop = self.drop
+            ) for x in self.layer_shapes[:-1]] +
 
             [
                 nn.Sequential(
-                    nn.Linear(self.layer_shapes[-1][0], self.in_features)
+                    nn.Linear(self.layer_shapes[-1][0] + self.cat_dim, self.in_features)
                 )
             ]
             ).to(self.device)
         
+        # attach covs to masks (set to 1s)
+        if len(self.n_cat_list) > 0:
+            if inject_covariates:
+                self.layer_shapes = [(lshape[0] + self.cat_dim, lshape[1]) for lshape in self.layer_shapes]
+                self.masks = [torch.hstack((mask, torch.ones(mask.shape[0], self.cat_dim).to(self.device))) for mask in self.masks]
+            else:
+                self.layer_shapes[-1] = (self.layer_shapes[-1][0] + self.cat_dim, self.layer_shapes[-1][1]) 
+                self.masks[-1] = torch.hstack((self.masks[-1], torch.ones(self.masks[-1].shape[0], self.cat_dim).to(self.device))) 
+
         # apply masks to zero out weights of non-existent connections
         for i in range(len(self.decoder)):
             self.decoder[i][0].weight.data = torch.mul(self.decoder[i][0].weight.data, self.masks[i])
@@ -140,19 +266,65 @@ class OntoDecoder(nn.Module):
         for i in range(len(self.decoder)):
             self.decoder[i][0].weight.data = self.decoder[i][0].weight.data.clamp(0)
 
-    def build_block(self, ins, outs):
-        return nn.Sequential(
-            nn.Linear(ins, outs)
-        )
 
-    def forward(self, z):
+    def forward(self, z: torch.tensor, cat_list: Iterable[torch.tensor]):
+        """
+        Forward computation on minibatch of samples.
+        
+        Parameters
+        ----------
+        z
+            torch.tensor of shape (minibatch, in_features)
+        cat_list
+            Iterable of torch.tensors containing the category memerships
+            shape of each tensor is (minibatch, 1)
+        """
 
-        # decoding
+        if self.cat_dim > 0:
+            categs = []
+            for n_cat, cat in zip(self.n_cat_list, cat_list):
+                if n_cat > 1:
+                    categs.append(one_hot(cat.long(), n_cat).squeeze())
+            categs = torch.hstack(categs)
+
         out = z
 
-        for layer in self.decoder[:-1]:
-            c = layer(out)
+        for block in self.decoder[:-1]:
+            for layer in block:
+                if layer is not None:
+                    if self.cat_dim > 0 and self.inject_covariates and isinstance(layer, nn.Linear):
+                        c = layer(torch.hstack((out, categs)))
+                    else:
+                        c = layer(out)
             out = torch.cat((c, out), dim=1)
-        reconstruction = self.decoder[-1](out)
         
-        return reconstruction
+        if self.cat_dim > 0:
+            out = torch.hstack((out, categs))
+
+        for layer in self.decoder[-1]:
+            if layer is not None:
+                out = layer(out)
+        
+        return out
+    
+
+"""Function to build NN blocks"""
+
+def build_block(ins: int,
+                outs: int,
+                cat_dim: int,
+                use_batch_norm: bool = True,
+                use_layer_norm: bool = False,
+                use_activation: bool = True,
+                activation_fn: nn.Module = nn.ReLU,
+                bias: bool = True,
+                inject_covariates: bool = True,
+                drop: float = 0.2, 
+                ):
+    return nn.Sequential(
+            nn.Linear(ins + cat_dim * inject_covariates, outs, bias=bias),
+            nn.BatchNorm1d(outs) if use_batch_norm else None,
+            nn.LayerNorm(outs) if use_layer_norm else None,
+            activation_fn() if use_activation else None,
+            nn.Dropout(p=drop) if drop > 0 else None
+        )

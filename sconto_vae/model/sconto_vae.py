@@ -1,20 +1,19 @@
 #!/usr/bin/env python3
 
-import sys
 import numpy as np
+import pandas as pd
 import torch
 from torch import optim
 import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm
 
+from typing import Iterable
+
 from anndata import AnnData
-from scvi.data import AnnDataManager
-from scvi.data.fields import CategoricalObsField, LayerField
-from scvi.dataloaders import AnnDataLoader
 
 from sconto_vae.module.modules import Encoder, OntoDecoder
-from sconto_vae.module.utils import FastTensorDataLoader
+from sconto_vae.module.utils import split_adata, FastTensorDataLoader
 
 
 
@@ -29,26 +28,66 @@ class scOntoVAE(nn.Module):
     ----------
     adata
         anndata object that has been preprocessed with setup_anndata function
-    neuronnum
-        number of neurons per term
-    drop
-        dropout rate, default is 0.2
+    use_batch_norm_enc
+        Whether to have `BatchNorm` layers or not in encoder
+    use_layer_norm_enc
+        Whether to have `LayerNorm` layers or not in encoder
+    use_activation_enc
+        Whether to have layer activation or not in encoder
+    activation_fn_enc
+        Which activation function to use in encoder
+    bias_enc
+        Whether to learn bias in linear layers or not in encoder
+    inject_covariates_enc
+        Whether to inject covariates in each layer (True), or just the first (False) of encoder
+    drop_enc
+        dropout rate in encoder
     z_drop
-        dropout rate for latent space, default is 0.5
+        dropout rate for latent space 
+    neuronnum
+        number of neurons per term in decoder
+    use_batch_norm_dec
+        Whether to have `BatchNorm` layers or not in decoder
+    use_layer_norm_dec
+        Whether to have `LayerNorm` layers or not in decoder
+    use_activation_dec
+        Whether to have layer activation or not in decoder
+    activation_fn_dec
+        Which activation function to use in decoder
+    bias_dec
+        Whether to learn bias in linear layers or not in decoder
+    inject_covariates_dec
+        Whether to inject covariates in each layer (True), or just the last (False) of decoder
+    drop_dec
+        dropout rate in decoder
     """
 
     def __init__(self, 
                  adata: AnnData, 
-                 neuronnum: int = 3, 
-                 drop: float = 0.2, 
-                 z_drop: float = 0.5):
-        super(scOntoVAE, self).__init__()
+                 use_batch_norm_enc: bool = True,
+                 use_layer_norm_enc: bool = False,
+                 use_activation_enc: bool = True,
+                 activation_fn_enc: nn.Module = nn.ReLU,
+                 bias_enc: bool = True,
+                 inject_covariates_enc: bool = True,
+                 drop_enc: float = 0.2, 
+                 z_drop: float = 0.5,
+                 neuronnum: int = 3,
+                 use_batch_norm_dec: bool = False,
+                 use_layer_norm_dec: bool = False,
+                 use_activation_dec: bool = False,
+                 activation_fn_dec: nn.Module = nn.ReLU,
+                 bias_dec: bool = True,
+                 inject_covariates_dec: bool = False,
+                 drop_dec: float = 0):
+        super().__init__()
 
         self.adata = adata
 
         if '_ontovae' not in self.adata.uns.keys():
             raise ValueError('Please run sconto_vae.module.utils.setup_anndata_ontovae first.')
 
+        # parse OntoVAE information
         self.thresholds = adata.uns['_ontovae']['thresholds']
         self.in_features = len(self.adata.uns['_ontovae']['genes'])
         self.mask_list = adata.uns['_ontovae']['masks']
@@ -57,25 +96,57 @@ class scOntoVAE(nn.Module):
         self.latent_dim = self.layer_dims_dec[0] * neuronnum
         self.layer_dims_enc = [self.latent_dim]
         self.neuronnum = neuronnum
-        self.drop = drop
-        self.z_drop = z_drop
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
+        # parse SCVI information
+        self.batch = adata.obs['_scvi_batch']
+        self.labels = adata.obs['_scvi_labels']
+        self.covs = adata.obsm['_scvi_extra_categorical_covs'] if '_scvi_extra_categorical_covs' in adata.obsm.keys() else None
+
+        self.n_cat_list = [len(self.batch.unique()), len(self.labels.unique())]
+        if self.covs is not None:
+            self.n_cat_list.extend([len(self.covs[c].unique()) for c in self.covs.columns])
+
         # Encoder
-        self.encoder = Encoder(self.in_features,
-                                self.latent_dim,
-                                self.layer_dims_enc,
-                                self.drop,
-                                self.z_drop)
+        self.encoder = Encoder(in_features = self.in_features,
+                                latent_dim = self.latent_dim,
+                                n_cat_list = self.n_cat_list,
+                                layer_dims = self.layer_dims_enc,
+                                use_batch_norm = use_batch_norm_enc,
+                                use_layer_norm = use_layer_norm_enc,
+                                use_activation = use_activation_enc,
+                                activation_fn = activation_fn_enc,
+                                bias = bias_enc,
+                                inject_covariates = inject_covariates_enc,
+                                drop = drop_enc,
+                                z_drop = z_drop)
 
         # Decoder
-        self.decoder = OntoDecoder(self.in_features,
-                                    self.layer_dims_dec,
-                                    self.mask_list,
-                                    self.latent_dim,
-                                    self.neuronnum)
+        self.decoder = OntoDecoder(in_features = self.in_features,
+                                    layer_dims = self.layer_dims_dec,
+                                    mask_list = self.mask_list,
+                                    latent_dim = self.latent_dim,
+                                    neuronnum = self.neuronnum,
+                                    n_cat_list = self.n_cat_list,
+                                    use_batch_norm = use_batch_norm_dec,
+                                    use_layer_norm = use_layer_norm_dec,
+                                    use_activation = use_activation_dec,
+                                    activation_fn = activation_fn_dec,
+                                    bias = bias_dec,
+                                    inject_covariates = inject_covariates_dec,
+                                    drop = drop_dec)
 
         self.X = adata.X
+        self.to(self.device)
+
+    def _cov_tensor(self, adata):
+        """
+        Helper function to aggregate information from adata to use as input for dataloader.
+        """
+        covs = adata.obs[['_scvi_batch', '_scvi_labels']]
+        if '_scvi_extra_categorical_covs' in adata.obsm.keys():
+            covs = pd.concat([covs, adata.obsm['_scvi_extra_categorical_covs']], axis=1)
+        return torch.tensor(np.array(covs))
 
     def reparameterize(self, mu, log_var):
         """
@@ -92,28 +163,43 @@ class scOntoVAE(nn.Module):
         eps = torch.randn_like(sigma) 
         return mu + eps * sigma
         
-    def _get_embedding(self, x):
+    def _get_embedding(self, x: torch.tensor, cat_list: Iterable[torch.tensor]):
         """
         Generates latent space embedding.
 
         Parameters
         ----------
         x
-            dataset of which embedding should be generated
+            torch.tensor of shape (minibatch, in_features)
+        cat_list
+            Iterable of torch.tensors containing the category memberships
+            shape of each tensor is (minibatch, 1)
         """
-        mu, log_var = self.encoder(x)
+        mu, log_var = self.encoder(x, cat_list)
         embedding = self.reparameterize(mu, log_var)
         return embedding
 
-    def forward(self, x):
+
+    def forward(self, x: torch.tensor, cat_list: Iterable[torch.tensor]):
+        """
+        Forward computation on minibatch of samples.
+        
+        Parameters
+        ----------
+        x
+            torch.tensor of shape (minibatch, in_features)
+        cat_list
+            Iterable of torch.tensors containing the category memberships
+            shape of each tensor is (minibatch, 1)
+        """
         # encoding
-        mu, log_var = self.encoder(x)
+        mu, log_var = self.encoder(x, cat_list)
             
         # sample from latent space
         z = self.reparameterize(mu, log_var)
         
         # decoding
-        reconstruction = self.decoder(z)
+        reconstruction = self.decoder(z, cat_list)
             
         return reconstruction, mu, log_var
 
@@ -128,7 +214,11 @@ class scOntoVAE(nn.Module):
             run["metrics/" + mode + "/rec_loss"].log(rec_loss)
         return torch.mean(rec_loss + kl_coeff*kl_loss)
 
-    def train_round(self, dataloader, kl_coeff, optimizer, run=None):
+    def train_round(self, 
+                    dataloader: FastTensorDataLoader, 
+                    kl_coeff: float, 
+                    optimizer: optim.Optimizer, 
+                    run=None):
         """
         Parameters
         ----------
@@ -148,14 +238,15 @@ class scOntoVAE(nn.Module):
         running_loss = 0.0
 
         # iterate over dataloader for training
-        for i, data in tqdm(enumerate(dataloader), total=len(dataloader)):
+        for i, minibatch in tqdm(enumerate(dataloader), total=len(dataloader)):
 
-            # move batch to device
-            data = torch.tensor(data[0].todense(), dtype=torch.float32).to(self.device)
+            # move minibatch to device
+            data = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
+            cat_list = torch.split(minibatch[1].T.to(self.device), 1)
             optimizer.zero_grad()
 
             # forward step
-            reconstruction, mu, log_var = self.forward(data)
+            reconstruction, mu, log_var = self.forward(data, cat_list)
             loss = self.vae_loss(reconstruction, mu, log_var, data, kl_coeff, mode='train', run=run)
             running_loss += loss.item()
 
@@ -178,7 +269,10 @@ class scOntoVAE(nn.Module):
         return train_loss
 
     @torch.no_grad()
-    def val_round(self, dataloader, kl_coeff, run=None):
+    def val_round(self, 
+                  dataloader: FastTensorDataLoader, 
+                  kl_coeff: float, 
+                  run=None):
         """
         Parameters
         ----------
@@ -196,13 +290,14 @@ class scOntoVAE(nn.Module):
         running_loss = 0.0
 
         # iterate over dataloader for validation
-        for i, data in tqdm(enumerate(dataloader), total=len(dataloader)):
+        for i, minibatch in tqdm(enumerate(dataloader), total=len(dataloader)):
 
-            # move batch to device
-            data = torch.tensor(data[0].todense(), dtype=torch.float32).to(self.device)
+            # move minibatch to device
+            data = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
+            cat_list = torch.split(minibatch[1].T.to(self.device), 1)
 
             # forward step
-            reconstruction, mu, log_var = self.forward(data)
+            reconstruction, mu, log_var = self.forward(data, cat_list)
             loss = self.vae_loss(reconstruction, mu, log_var,data, kl_coeff, mode='val', run=run)
             running_loss += loss.item()
 
@@ -212,9 +307,12 @@ class scOntoVAE(nn.Module):
 
     def train_model(self, 
                     modelpath: str, 
+                    train_size: float = 0.9,
+                    seed: int = 42,
                     lr: float=1e-4, 
                     kl_coeff: float=1e-4, 
                     batch_size: int=128, 
+                    optimizer: optim.Optimizer = optim.AdamW,
                     epochs: int=300, 
                     run=None):
         """
@@ -222,33 +320,43 @@ class scOntoVAE(nn.Module):
         ----------
         modelpath
             where to store the best model (full path with filename)
+        train_size
+            which percentage of samples to use for training
+        seed
+            seed for the train-val split
         lr
             learning rate
         kl_coeff
             Kullback Leibler loss coefficient
         batch_size
             size of minibatches
+        optimizer
+            which optimizer to use
         epochs
             over how many epochs to train
         run
             passed here if logging to Neptune should be carried out
         """
-        # train-test split
-        indices = np.random.RandomState(seed=42).permutation(self.X.shape[0])
-        X_train_ind = indices[:round(len(indices)*0.8)]
-        X_val_ind = indices[round(len(indices)*0.8):]
-        X_train, X_val = self.X[X_train_ind,:], self.X[X_val_ind,:]
+        # train-val split
+        train_adata, val_adata = split_adata(self.adata, 
+                                             train_size = train_size,
+                                             seed = seed)
+
+        train_covs = self._cov_tensor(train_adata)
+        val_covs = self._cov_tensor(val_adata)
 
         # generate dataloaders
-        trainloader = FastTensorDataLoader(X_train, 
-                                       batch_size=batch_size, 
-                                       shuffle=True)
-        valloader = FastTensorDataLoader(X_val, 
+        trainloader = FastTensorDataLoader(train_adata.X, 
+                                           train_covs,
+                                         batch_size=batch_size, 
+                                         shuffle=True)
+        valloader = FastTensorDataLoader(val_adata.X, 
+                                         val_covs,
                                         batch_size=batch_size, 
                                         shuffle=False)
 
         val_loss_min = float('inf')
-        optimizer = optim.AdamW(self.parameters(), lr = lr)
+        optimizer = optimizer(self.parameters(), lr = lr)
 
         for epoch in range(epochs):
             print(f"Epoch {epoch+1} of {epochs}")
@@ -300,14 +408,17 @@ class scOntoVAE(nn.Module):
 
 
     @torch.no_grad()
-    def _pass_data(self, data, output):
+    def _pass_data(self, x, cat_list, output):
         """
         Passes data through the model.
 
         Parameters
         ----------
-        data
-            data to be passed
+        x
+            torch.tensor of shape (minibatch, in_features)
+        cat_list
+            Iterable of torch.tensors containing the category memberships
+            shape of each tensor is (minibatch, 1)
         output
             'act': return pathway activities
             'rec': return reconstructed values
@@ -316,11 +427,8 @@ class scOntoVAE(nn.Module):
         # set to eval mode
         self.eval()
 
-        # move data to device
-        data = data.to(self.device)
-
         # get latent space embedding
-        z = self._get_embedding(data)
+        z = self._get_embedding(x, cat_list)
         z = z.to('cpu').detach().numpy()
         
         z = np.array(np.split(z, z.shape[1]/self.neuronnum, axis=1)).mean(axis=2).T
@@ -333,7 +441,7 @@ class scOntoVAE(nn.Module):
         self._attach_hooks(activation=activation, hooks=hooks)
         
         # pass data through model
-        reconstruction, _, _ = self.forward(data)
+        reconstruction, _, _ = self.forward(x, cat_list)
 
         act = torch.cat(list(activation.values()), dim=1).to('cpu').detach().numpy()
         act = np.array(np.split(act, act.shape[1]/self.neuronnum, axis=1)).mean(axis=2).T
@@ -369,16 +477,19 @@ class scOntoVAE(nn.Module):
         else:
             adata = self.adata
 
-        anndata_fields = [
-            LayerField(registry_key="x", layer=None, is_count_data=False)
-        ]
-        adata_manager = AnnDataManager(fields=anndata_fields)
-        adata_manager.register_fields(adata)
-        dl = AnnDataLoader(adata_manager, indices=indices, batch_size=128)
+        covs = self._cov_tensor(adata)
+
+        # generate dataloaders
+        dataloader = FastTensorDataLoader(adata.X, 
+                                          covs,
+                                         batch_size=128, 
+                                         shuffle=False)
 
         act = []
-        for tensors in dl:
-            act.append(self._pass_data(tensors['x'], 'act'))
+        for minibatch in dataloader:
+            x = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
+            cat_list = torch.split(minibatch[1].T.to(self.device), 1)
+            act.append(self._pass_data(x, cat_list, 'act'))
         act = np.vstack(act)
 
         # if term was specified, subset
@@ -412,16 +523,19 @@ class scOntoVAE(nn.Module):
         else:
             adata = self.adata
 
-        anndata_fields = [
-            LayerField(registry_key="x", layer=None, is_count_data=False)
-        ]
-        adata_manager = AnnDataManager(fields=anndata_fields)
-        adata_manager.register_fields(adata)
-        dl = AnnDataLoader(adata_manager, indices=indices, batch_size=128)
+        covs = self._cov_tensor(adata)
+
+        # generate dataloaders
+        dataloader = FastTensorDataLoader(adata.X, 
+                                          covs,
+                                         batch_size=128, 
+                                         shuffle=False)
 
         rec = []
-        for tensors in dl:
-            rec.append(self._pass_data(tensors['x'], 'rec'))
+        for minibatch in dataloader:
+            x = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
+            cat_list = torch.split(minibatch[1].T.to(self.device), 1)
+            rec.append(self._pass_data(x, cat_list, 'rec'))
         rec = np.vstack(rec)
 
         # if genes were passed, subset
@@ -472,20 +586,23 @@ class scOntoVAE(nn.Module):
         for i in range(len(genes)):
             adata.X[:,gindices[i]] = values[i]
 
-        anndata_fields = [
-            LayerField(registry_key="x", layer=None, is_count_data=False)
-        ]
-        adata_manager = AnnDataManager(fields=anndata_fields)
-        adata_manager.register_fields(adata)
-        dl = AnnDataLoader(adata_manager, indices=indices, batch_size=128)
+        covs = self._cov_tensor(adata)
+
+        # generate dataloader
+        dataloader = FastTensorDataLoader(adata.X, 
+                                          covs,
+                                         batch_size=128, 
+                                         shuffle=False)
 
         # get pathway activities or reconstructed values after perturbation
         res = []
-        for tensors in dl:
+        for minibatch in dataloader:
+            x = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
+            cat_list = torch.split(minibatch[1].T.to(self.device), 1)
             if output == 'terms':
-                res.append(self._pass_data(tensors['x'], 'act'))
+                res.append(self._pass_data(x, cat_list, 'act'))
             if output == 'genes':
-                res.append(self._pass_data(tensors['x'], 'rec'))
+                res.append(self._pass_data(x, cat_list, 'rec'))
 
         # if term was specified, subset
         if terms is not None:
