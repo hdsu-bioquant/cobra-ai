@@ -2,16 +2,13 @@ import numpy as np
 import pandas as pd
 import torch
 import pkg_resources
-# import scanpy as sc
 from scipy.sparse import csr_matrix
 from scvi import REGISTRY_KEYS
 from scvi.data import AnnDataManager
 from scvi.data.fields import CategoricalObsField, CategoricalJointObsField, LayerField
-from scvi.dataloaders import DataSplitter
 import anndata as ad
 from anndata import AnnData
 from .ontobj import Ontobj
-# import warnings
 from typing import Optional, Union
 from scipy import stats
 from statsmodels.stats.multitest import fdrcorrection
@@ -111,19 +108,16 @@ def setup_anndata_ontovae(adata: AnnData,
 
 
 
-def _scvi_loader(adata: AnnData, train_size: float, batch_size: float, use_gpu=False):
+def split_adata(adata: AnnData, train_size: float = 0.9, seed: int = 42):
     """
-    SCVI splitter. Returs SCVI loader for train and test set.
-    Taken from VEGA.
+    Returns train_adata and val/test_adata
     """
-    data_splitter = DataSplitter(
-            adata,
-            train_size=train_size,
-            validation_size=1.-train_size,
-            batch_size=batch_size,
-            use_gpu=use_gpu)
-    train_dl, val_dl, _ = data_splitter()
-    return train_dl, val_dl
+    indices = np.random.RandomState(seed=seed).permutation(adata.shape[0])
+    X_train_ind = indices[:round(len(indices)*train_size)]
+    X_val_ind = indices[round(len(indices)*train_size):]
+    train_adata = adata[X_train_ind,:].copy()
+    val_adata = adata[X_val_ind,:].copy() 
+    return train_adata, val_adata
 
 
 
