@@ -287,16 +287,17 @@ class OntoDecoder(nn.Module):
                     categs.append(one_hot(cat.long(), n_cat).squeeze())
             categs = torch.hstack(categs)
 
-        out = z
+        out = z.clone()
 
         for block in self.decoder[:-1]:
             for layer in block:
                 if layer is not None:
                     if self.cat_dim > 0 and self.inject_covariates and isinstance(layer, nn.Linear):
-                        c = layer(torch.hstack((out, categs)))
+                        z = layer(torch.hstack((z, categs)))
                     else:
-                        c = layer(out)
-            out = torch.cat((c, out), dim=1)
+                        z = layer(z)
+            out = torch.cat((z, out), dim=1)
+            z = out.clone()
         
         if self.cat_dim > 0:
             out = torch.hstack((out, categs))
