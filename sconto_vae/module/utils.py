@@ -182,7 +182,7 @@ class FastTensorDataLoader:
     
 """Plotting"""
 
-def plot_scatter(adata: AnnData, color_by: str, act, term1: str, term2: str):
+def plot_scatter(adata: AnnData, color_by: list, act, term1: str, term2: str):
         """ 
         Creates a scatterplot of two pathway activities.
 
@@ -191,7 +191,7 @@ def plot_scatter(adata: AnnData, color_by: str, act, term1: str, term2: str):
         adata
             AnnData object that was processed with setup_anndata_ontovae
         color_by
-            coavariate by which to color the samples (has to be present in adata)
+            list of coavariates by which to color the samples (has to be present in adata)
         act
             numpy array containing pathway activities
         term1
@@ -203,32 +203,41 @@ def plot_scatter(adata: AnnData, color_by: str, act, term1: str, term2: str):
         if '_ontovae' not in adata.uns.keys():
             raise ValueError('Please run sconto_vae.module.utils.setup_anndata first.')
         
-        if not color_by in adata.obs:
-            raise ValueError('Please set color_by to a covariate present in adata.obs.')
-    
-        # create color dict
-        categs = adata.obs[color_by].unique().tolist()
-        palette = sns.color_palette(cc.glasbey, n_colors=len(categs))
-        color_dict = dict(zip(categs, palette))
+        for c in color_by:
+            if not c in adata.obs:
+                raise ValueError('Please set color_by to a covariate present in adata.obs.')
 
         # extract ontology annot and get term indices
         onto_annot = adata.uns['_ontovae']['annot']
-        ind1 = onto_annot[onto_annot.Name == term1].index.to_numpy()
-        ind2 = onto_annot[onto_annot.Name == term2].index.to_numpy()
+        onto_annot.index = onto_annot.index.astype(int)
+        ind1 = onto_annot[onto_annot.Name == term1].index.to_numpy()[0]
+        ind2 = onto_annot[onto_annot.Name == term2].index.to_numpy()[0]
+
+        fig, ax = plt.subplots(1,len(color_by), figsize=(len(color_by)*10,10))
 
         # make scatterplot
-        fig, ax = plt.subplots(figsize=(10,7))
-        sns.scatterplot(x=act[:,ind1].flatten(),
-                        y=act[:,ind2].flatten(),
-                        hue=adata.obs[color_by],
-                        palette=color_dict,
-                        legend='full',
-                        s=8,
-                        rasterized=True)
+        for c in range(len(color_by)):
+
+            # create color dict
+            covar_categs = adata.obs[color_by[c]].unique().tolist()
+            palette = sns.color_palette(cc.glasbey, n_colors=len(covar_categs))
+            color_dict = dict(zip(covar_categs, palette))
+
+            # make scatter plot
+            sns.scatterplot(x=act[:,ind1],
+                            y=act[:,ind2], 
+                            hue=adata.obs[color_by[c]],
+                            palette=color_dict,
+                            legend='full',
+                            s=15,
+                            rasterized=True,
+                            ax=ax.flatten()[c])
+            ax.flatten()[c].set_xlabel(term1)
+            ax.flatten()[c].set_ylabel(term2)
+
         plt.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.)
-        plt.xlabel(term1)
-        plt.ylabel(term2)
         plt.tight_layout()
+        return fig, ax
 
 
 
