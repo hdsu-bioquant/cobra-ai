@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import json
 
 import numpy as np
 import pandas as pd
@@ -14,7 +15,6 @@ from anndata import AnnData
 
 from sconto_vae.module.modules import Encoder, OntoDecoder
 from sconto_vae.module.utils import split_adata, FastTensorDataLoader
-
 
 
 """VAE with ontology in decoder"""
@@ -52,6 +52,8 @@ class scOntoVAE(nn.Module):
         Whether to have `LayerNorm` layers or not in decoder
     use_activation_dec
         Whether to have layer activation or not in decoder
+    use_activation_lat
+        Whether to use the decoder activation function after latent space sampling (not recommended)
     activation_fn_dec
         Which activation function to use in decoder
     bias_dec
@@ -62,6 +64,20 @@ class scOntoVAE(nn.Module):
         dropout rate in decoder
     """
 
+    @classmethod
+    def load(cls, adata: AnnData, modelpath: str):
+        with open(modelpath + '/model_params.json', 'r') as fp:
+            params = json.load(fp)
+        if params['activation_fn_enc'] is not None:
+            params['activation_fn_enc'] = eval(params['activation_fn_enc'])
+        if params['activation_fn_dec'] is not None:
+            params['activation_fn_dec'] = eval(params['activation_fn_dec'])
+        model = cls(adata, **params) 
+        checkpoint = torch.load(modelpath + '/best_model.pt',
+                            map_location = torch.device(model.device))
+        model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+        return model
+
     def __init__(self, 
                  adata: AnnData, 
                  use_batch_norm_enc: bool = True,
@@ -69,18 +85,39 @@ class scOntoVAE(nn.Module):
                  use_activation_enc: bool = True,
                  activation_fn_enc: nn.Module = nn.ReLU,
                  bias_enc: bool = True,
-                 inject_covariates_enc: bool = True,
+                 inject_covariates_enc: bool = False,
                  drop_enc: float = 0.2, 
                  z_drop: float = 0.5,
                  neuronnum: int = 3,
                  use_batch_norm_dec: bool = False,
                  use_layer_norm_dec: bool = False,
                  use_activation_dec: bool = False,
-                 activation_fn_dec: nn.Module = nn.ReLU,
+                 use_activation_lat: bool = False,
+                 activation_fn_dec: nn.Module = nn.Tanh,
                  bias_dec: bool = True,
                  inject_covariates_dec: bool = False,
                  drop_dec: float = 0):
         super().__init__()
+
+        # store init params in dict
+        self.params = {'use_batch_norm_enc': use_batch_norm_enc,
+                          'use_layer_norm_enc': use_layer_norm_enc,
+                          'use_activation_enc': use_activation_enc,
+                          'activation_fn_enc': str(activation_fn_enc).split("'")[1] if activation_fn_enc is not None else activation_fn_enc,
+                          'bias_enc': bias_enc,
+                          'inject_covariates_enc': inject_covariates_enc,
+                          'drop_enc': drop_enc,
+                          'z_drop': z_drop,
+                          'neuronnum': neuronnum,
+                          'use_batch_norm_dec': use_batch_norm_dec,
+                          'use_layer_norm_dec': use_layer_norm_dec,
+                          'use_activation_dec': use_activation_dec,
+                          'use_activation_lat': use_activation_lat,
+                          'activation_fn_dec': str(activation_fn_dec).split("'")[1] if activation_fn_dec is not None else activation_fn_dec,
+                          'bias_dec': bias_dec,
+                          'inject_covariates_dec': inject_covariates_dec,
+                          'drop_dec': drop_dec}
+
 
         self.adata = adata
 
@@ -95,8 +132,13 @@ class scOntoVAE(nn.Module):
         self.layer_dims_dec =  np.array([self.mask_list[0].shape[1]] + [m.shape[0] for m in self.mask_list])
         self.latent_dim = self.layer_dims_dec[0] * neuronnum
         self.layer_dims_enc = [self.latent_dim]
+
+        # additional info
         self.neuronnum = neuronnum
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.use_activation_dec = use_activation_dec
+        self.use_activation_lat = use_activation_lat
+        self.activation_fn_dec = activation_fn_dec
 
         # parse SCVI information
         self.batch = adata.obs['_scvi_batch']
@@ -136,7 +178,6 @@ class scOntoVAE(nn.Module):
                                     inject_covariates = inject_covariates_dec,
                                     drop = drop_dec)
 
-        self.X = adata.X
         self.to(self.device)
 
     def _cov_tensor(self, adata):
@@ -177,6 +218,8 @@ class scOntoVAE(nn.Module):
         """
         mu, log_var = self.encoder(x, cat_list)
         embedding = self.reparameterize(mu, log_var)
+        if self.use_activation_dec:
+            embedding = self.activation_fn_dec()(embedding)
         return embedding
 
 
@@ -192,15 +235,12 @@ class scOntoVAE(nn.Module):
             Iterable of torch.tensors containing the category memberships
             shape of each tensor is (minibatch, 1)
         """
-        # encoding
+
         mu, log_var = self.encoder(x, cat_list)
-            
-        # sample from latent space
         z = self.reparameterize(mu, log_var)
-        
-        # decoding
+        if self.use_activation_lat and self.use_activation_dec:
+            z = self.activation_fn_dec()(z)
         reconstruction = self.decoder(z, cat_list)
-            
         return reconstruction, mu, log_var
 
     def vae_loss(self, reconstruction, mu, log_var, data, kl_coeff, mode='train', run=None):
@@ -319,7 +359,7 @@ class scOntoVAE(nn.Module):
         Parameters
         ----------
         modelpath
-            where to store the best model (full path with filename)
+            path to a folder where to store the params and the best model 
         train_size
             which percentage of samples to use for training
         seed
@@ -337,6 +377,10 @@ class scOntoVAE(nn.Module):
         run
             passed here if logging to Neptune should be carried out
         """
+        # save model params
+        with open(modelpath + '/model_params.json', 'w') as fp:
+            json.dump(self.params, fp, indent=4)
+
         # train-val split
         train_adata, val_adata = split_adata(self.adata, 
                                              train_size = train_size,
@@ -358,6 +402,8 @@ class scOntoVAE(nn.Module):
         val_loss_min = float('inf')
         optimizer = optimizer(self.parameters(), lr = lr)
 
+
+
         for epoch in range(epochs):
             print(f"Epoch {epoch+1} of {epochs}")
             train_epoch_loss = self.train_round(trainloader, kl_coeff, optimizer, run)
@@ -374,24 +420,11 @@ class scOntoVAE(nn.Module):
                     'model_state_dict': self.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                     'loss': val_epoch_loss,
-                }, modelpath)
+                }, modelpath + '/best_model.pt')
                 val_loss_min = val_epoch_loss
                 
             print(f"Train Loss: {train_epoch_loss:.4f}")
-            print(f"Val Loss: {val_epoch_loss:.4f}")
-
-
-    def load(self, modelpath: str):
-        """
-        Helper function to load a model
-        
-        Parameters
-        ----------
-        Path where a trained model was saved.
-        """
-        checkpoint = torch.load(modelpath + '/best_model.pt',
-                            map_location = torch.device(self.device))
-        self.load_state_dict(checkpoint['model_state_dict'], strict=False)        
+            print(f"Val Loss: {val_epoch_loss:.4f}")     
 
 
     def _get_activation(self, index, activation={}):
@@ -399,16 +432,17 @@ class scOntoVAE(nn.Module):
             activation[index] = output
         return hook 
     
-    def _attach_hooks(self, activation={}, hooks={}):
+    def _attach_hooks(self, lin_layer=True, activation={}, hooks={}):
         """helper function to attach hooks to the decoder"""
         for i in range(len(self.decoder.decoder)-1):
             key = str(i)
-            value = self.decoder.decoder[i][0].register_forward_hook(self._get_activation(i, activation))
+            hook_ind=0 if lin_layer else np.where(np.array(self.decoder.decoder[i]) != None)[0][-1]
+            value = self.decoder.decoder[i][hook_ind].register_forward_hook(self._get_activation(i, activation))
             hooks[key] = value
 
 
     @torch.no_grad()
-    def _pass_data(self, x, cat_list, output):
+    def _pass_data(self, x, cat_list, output, lin_layer=True):
         """
         Passes data through the model.
 
@@ -422,6 +456,8 @@ class scOntoVAE(nn.Module):
         output
             'act': return pathway activities
             'rec': return reconstructed values
+        lin_layer:
+            whether hooks should be attached to linear layer of the model
         """
 
         # set to eval mode
@@ -430,21 +466,18 @@ class scOntoVAE(nn.Module):
         # get latent space embedding
         z = self._get_embedding(x, cat_list)
         z = z.to('cpu').detach().numpy()
-        
-        z = np.array(np.split(z, z.shape[1]/self.neuronnum, axis=1)).mean(axis=2).T
 
         # initialize activations and hooks
         activation = {}
         hooks = {}
 
         # attach the hooks
-        self._attach_hooks(activation=activation, hooks=hooks)
-        
+        self._attach_hooks(lin_layer=lin_layer, activation=activation, hooks=hooks)
+
         # pass data through model
         reconstruction, _, _ = self.forward(x, cat_list)
 
         act = torch.cat(list(activation.values()), dim=1).to('cpu').detach().numpy()
-        act = np.array(np.split(act, act.shape[1]/self.neuronnum, axis=1)).mean(axis=2).T
         
         # remove hooks
         for h in hooks:
@@ -456,9 +489,15 @@ class scOntoVAE(nn.Module):
         if output == 'rec':
             return reconstruction.to('cpu').detach().numpy()
 
+    def _average_neuronnum(self, act: np.array):
+        """
+        Helper function to calculate the average value of multiple neurons.
+        """
+        act = np.array(np.split(act, act.shape[1]/self.neuronnum, axis=1)).mean(axis=2).T
+        return act
 
     @torch.no_grad()
-    def get_pathway_activities(self, adata: AnnData=None, indices=None, terms=None):
+    def get_pathway_activities(self, adata: AnnData=None, terms=None, lin_layer=True):
         """
         Retrieves pathway activities from latent space and decoder.
 
@@ -466,10 +505,10 @@ class scOntoVAE(nn.Module):
         ----------
         adata
             AnnData object that was processed with setup_anndata
-        indices
-            if activities are to be retrieved for a subset of samples
         terms
             list of ontology term ids whose activities should be retrieved
+        lin_layer
+            whether linear layer should be used for calculation
         """
         if adata is not None:
             if '_ontovae' not in adata.uns.keys():
@@ -489,7 +528,9 @@ class scOntoVAE(nn.Module):
         for minibatch in dataloader:
             x = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
             cat_list = torch.split(minibatch[1].T.to(self.device), 1)
-            act.append(self._pass_data(x, cat_list, 'act'))
+            a = self._pass_data(x, cat_list, 'act', lin_layer)
+            aavg = self._average_neuronnum(a)
+            act.append(aavg)
         act = np.vstack(act)
 
         # if term was specified, subset
@@ -503,7 +544,7 @@ class scOntoVAE(nn.Module):
 
 
     @torch.no_grad()
-    def get_reconstructed_values(self, adata: AnnData=None, indices=None, rec_genes=None):
+    def get_reconstructed_values(self, adata: AnnData=None, rec_genes=None):
         """
         Retrieves reconstructed values from output layer.
 
@@ -511,8 +552,6 @@ class scOntoVAE(nn.Module):
         ----------
         adata
             AnnData object that was processed with setup_anndata
-        indices
-            if activities are to be retrieved for a subset of samples
         rec_genes
             list of genes whose reconstructed values should be retrieved
         """
@@ -535,7 +574,9 @@ class scOntoVAE(nn.Module):
         for minibatch in dataloader:
             x = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
             cat_list = torch.split(minibatch[1].T.to(self.device), 1)
-            rec.append(self._pass_data(x, cat_list, 'rec'))
+            r = self._pass_data(x, cat_list, 'rec')
+            ravg = self._average_neuronnum(r)
+            rec.append(ravg)
         rec = np.vstack(rec)
 
         # if genes were passed, subset
@@ -549,7 +590,7 @@ class scOntoVAE(nn.Module):
 
     
     @torch.no_grad()
-    def perturbation(self, adata: AnnData=None, indices=None, genes: list=[], values: list=[], output='terms', terms=None, rec_genes=None):
+    def perturbation(self, adata: AnnData=None, indices=None, genes: list=[], values: list=[], output='terms', terms=None, rec_genes=None, lin_layer=True):
         """
         Retrieves pathway activities or reconstructed gene values after performing in silico perturbation.
 
@@ -571,6 +612,8 @@ class scOntoVAE(nn.Module):
             list of ontology term ids whose values should be retrieved
         rec_genes
             list of genes whose values should be retrieved
+        lin_layer
+            whether linear layer should be used for pathway activity retrieval
         """
 
         if adata is not None:
@@ -600,9 +643,13 @@ class scOntoVAE(nn.Module):
             x = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
             cat_list = torch.split(minibatch[1].T.to(self.device), 1)
             if output == 'terms':
-                res.append(self._pass_data(x, cat_list, 'act'))
+                r = self._pass_data(x, cat_list, 'act', lin_layer)
+                ravg = self._average_neuronnum(r)
+                res.append(ravg)
             if output == 'genes':
-                res.append(self._pass_data(x, cat_list, 'rec'))
+                r = self._pass_data(x, cat_list, 'rec')
+                ravg = self._average_neuronnum(r)
+                res.append(ravg)
 
         # if term was specified, subset
         if terms is not None:
