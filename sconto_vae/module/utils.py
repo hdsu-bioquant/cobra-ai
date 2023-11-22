@@ -8,7 +8,7 @@ from scvi.data import AnnDataManager
 from scvi.data.fields import CategoricalObsField, CategoricalJointObsField, LayerField
 import anndata as ad
 from anndata import AnnData
-from .ontobj import Ontobj
+from sconto_vae.module.ontobj import Ontobj
 from typing import Optional, Union
 from scipy import stats
 from statsmodels.stats.multitest import fdrcorrection
@@ -26,8 +26,8 @@ def setup_anndata_ontovae(adata: AnnData,
                 batch_key: Optional[str] = None,
                 labels_key: Optional[str] = None,
                 categorical_covariate_keys: Optional[list[str]] = None,
-                layer: Optional[str] = None,
-                is_count_data: bool = False):
+                class_key: Optional[str] = None,
+                layer: Optional[str] = None):
     
     """
     Matches the dataset to the ontology and creates OntoVAE fields.
@@ -51,8 +51,6 @@ def setup_anndata_ontovae(adata: AnnData,
             Observation to use as covariate keys
         layer
             layer of AnnData containing the data
-        is_count_data
-            if data is raw counts or log-normalized
 
     Returns
     -------
@@ -68,8 +66,15 @@ def setup_anndata_ontovae(adata: AnnData,
     if not str(top_thresh) + '_' + str(bottom_thresh) in ontobj.genes.keys():
             raise ValueError('Available trimming thresholds are: ' + ', '.join(list(ontobj.genes.keys())))
     
+    if layer is not None:
+         adata.X = adata.layers[layer].copy()
+        
+    if len(list(adata.layers.keys())) > 0:
+        for k in list(adata.layers.keys()):
+            del adata.layers[k]
+         
     genes = ontobj.extract_genes(top_thresh=top_thresh, bottom_thresh=bottom_thresh)
-    adata = adata[:,adata.var_names.isin(genes)]
+    adata = adata[:,adata.var_names.isin(genes)].copy()
 
     # create dummy adata for features that were not present in adata
     out_genes = [g for g in genes if g not in adata.var_names.tolist()]
@@ -79,8 +84,10 @@ def setup_anndata_ontovae(adata: AnnData,
     ddata.var_names = out_genes
 
     # create OntoVAE matched adata and register ontology information
+
     ndata = ad.concat([adata, ddata], join="outer", axis=1)
-    ndata = ndata[:,ndata.var_names.sort_values()].copy()
+    ndata = ndata[:,ndata.var_names.sort_values()]
+    ndata.var.iloc[:,0] = ndata.var.index.tolist()
     ndata.obs = adata.obs
     ndata.obsm = adata.obsm
     ndata.uns['_ontovae'] = {}
@@ -89,10 +96,14 @@ def setup_anndata_ontovae(adata: AnnData,
     ndata.uns['_ontovae']['genes'] = ontobj.extract_genes(top_thresh=top_thresh, bottom_thresh=bottom_thresh)
     ndata.uns['_ontovae']['masks'] = ontobj.extract_masks(top_thresh=top_thresh, bottom_thresh=bottom_thresh)
 
+    if class_key is not None:
+        ndata.uns['_ontovae']['class_col'] = adata.obs[class_key]
+        ndata.uns['_ontovae']['class'] = pd.factorize(adata.obs[class_key])[0]
+
     # register SCVI fields
     ndata = ndata.copy()
     anndata_fields = [
-            LayerField(REGISTRY_KEYS.X_KEY, layer, is_count_data=is_count_data),
+            LayerField(REGISTRY_KEYS.X_KEY, layer=None, is_count_data=False),
             CategoricalObsField(REGISTRY_KEYS.BATCH_KEY, batch_key),
             CategoricalObsField(REGISTRY_KEYS.LABELS_KEY, labels_key),
             CategoricalJointObsField(
