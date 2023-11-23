@@ -377,6 +377,18 @@ class scOntoVAE(nn.Module):
         run
             passed here if logging to Neptune should be carried out
         """
+        # save train params
+        train_params = {'train_size': train_size,
+                        'seed': seed,
+                        'lr': lr,
+                        'kl_coeff': kl_coeff,
+                        'batch_size': batch_size,
+                        'optimizer': str(optimizer).split("'")[1],
+                        'epochs': epochs
+                        }
+        with open(modelpath + '/train_params.json', 'w') as fp:
+            json.dump(train_params, fp, indent=4)
+
         # save model params
         with open(modelpath + '/model_params.json', 'w') as fp:
             json.dump(self.params, fp, indent=4)
