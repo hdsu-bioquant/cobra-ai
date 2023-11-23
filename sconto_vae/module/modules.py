@@ -137,10 +137,11 @@ class Encoder(nn.Module):
                         c = layer(c)
             else:
                 for layer in block:
-                    if self.cat_dim > 0 and self.inject_covariates and isinstance(layer, nn.Linear):
-                        c = layer(torch.hstack((c, categs)))
-                    else:
-                        c = layer(c)
+                    if layer is not None:
+                        if self.cat_dim > 0 and self.inject_covariates and isinstance(layer, nn.Linear):
+                            c = layer(torch.hstack((c, categs)))
+                        else:
+                            c = layer(c)
     
         if self.cat_dim > 0 and self.inject_covariates :
             c = torch.hstack((c, categs))
@@ -307,8 +308,133 @@ class OntoDecoder(nn.Module):
                 out = layer(out)
         
         return out
-    
 
+
+"""Classifier module"""
+class Classifier(nn.Module):
+    """
+    Classifier module that can do binary or multi-class classification
+    Parameters
+    -------------
+    in_features
+        # of features that are used as input
+    n_classes 
+        number of classes
+    n_cat_list
+        A list containing, for each category of interest,
+        the number of categories. Each category will be
+        included using a one-hot encoding.
+    layer_dims
+        list giving the dimensions of the hidden layers
+    use_batch_norm
+        Whether to have `BatchNorm` layers or not
+    use_layer_norm
+        Whether to have `LayerNorm` layers or not
+    use_activation
+        Whether to have layer activation or not
+    activation_fn
+        Which activation function to use
+    bias
+        Whether to learn bias in linear layers or not
+    inject_covariates
+        Whether to inject covariates in each layer (True), or just the first (False).
+    drop
+        dropout rate
+    """
+    def __init__(self, 
+                 in_features: int, 
+                 n_classes: int, 
+                 n_cat_list: Iterable[int] = None,
+                 layer_dims: list = [64], 
+                 use_batch_norm: bool = True,
+                 use_layer_norm: bool = False,
+                 use_activation: bool = True,
+                 activation_fn: nn.Module = nn.ReLU,
+                 bias: bool = True,
+                 inject_covariates: bool = True,
+                 drop: float = 0.2):
+        super().__init__()
+        self.in_features = in_features
+        self.layer_dims = layer_dims
+        self.layer_nums = [layer_dims[i:i+2] for i in range(len(layer_dims)-1)]
+        self.n_classes = n_classes
+        self.drop = drop
+        if n_cat_list is not None:
+            # n_cat = 1 will be ignored
+            self.n_cat_list = [n_cat if n_cat > 1 else 0 for n_cat in n_cat_list]
+        else:
+            self.n_cat_list = []
+        self.inject_covariates = inject_covariates
+        self.cat_dim = sum(self.n_cat_list)
+
+        self.classifier = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Linear(self.in_features + self.cat_dim, self.layer_dims[0], bias=bias),
+                    nn.BatchNorm1d(self.layer_dims[0]) if use_batch_norm else None,
+                    nn.LayerNorm(self.layer_dims[0]) if use_layer_norm else None,
+                    activation_fn() if use_activation else None,
+                    nn.Dropout(p=self.drop) if self.drop > 0 else None
+                )
+            ] +
+            [build_block(ins = x[0],
+                outs = x[1],
+                cat_dim = self.cat_dim,
+                use_batch_norm = use_batch_norm,
+                use_layer_norm = use_layer_norm,
+                use_activation = use_activation,
+                activation_fn = activation_fn,
+                bias = bias,
+                inject_covariates = inject_covariates,
+                drop = self.drop
+            ) for x in self.layer_nums] +
+            [
+                nn.Sequential(
+                    nn.Linear(self.layer_dims[-1] + self.cat_dim * inject_covariates, self.n_classes, bias=bias),
+                    nn.BatchNorm1d(self.n_classes) if use_batch_norm else None,
+                    nn.LayerNorm(self.n_classes) if use_layer_norm else None,
+                    nn.Softmax() if self.n_classes > 2 else nn.Sigmoid()
+                )
+            ]
+
+        )
+    
+    def forward(self, x: torch.tensor, cat_list: Iterable[torch.tensor]):
+        """
+        Forward computation on minibatch of samples.
+        
+        Parameters
+        ----------
+        x
+            torch.tensor of shape (minibatch, in_features)
+        cat_list
+            Iterable of torch.tensors containing the category memberships
+            shape of each tensor is (minibatch, 1)
+        """
+        if self.cat_dim > 0:
+            categs = []
+            for n_cat, cat in zip(self.n_cat_list, cat_list):
+                if n_cat > 1:
+                    categs.append(one_hot(cat.long(), n_cat).squeeze())
+            categs = torch.hstack(categs)
+            c = torch.hstack((x, categs))
+        else:
+            c = x
+        for i, block in enumerate(self.classifier):
+            if i == 0:
+                for layer in block:
+                    if layer is not None:
+                        c = layer(c)
+            else:
+                for layer in block:
+                    if layer is not None:
+                        if self.cat_dim > 0 and self.inject_covariates and isinstance(layer, nn.Linear):
+                            c = layer(torch.hstack((c, categs)))
+                        else:
+                            c = layer(c)
+
+        return c
+    
 """Function to build NN blocks"""
 
 def build_block(ins: int,
