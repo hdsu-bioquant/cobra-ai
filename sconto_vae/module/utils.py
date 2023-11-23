@@ -97,8 +97,8 @@ def setup_anndata_ontovae(adata: AnnData,
     ndata.uns['_ontovae']['masks'] = ontobj.extract_masks(top_thresh=top_thresh, bottom_thresh=bottom_thresh)
 
     if class_key is not None:
-        ndata.uns['_ontovae']['class_col'] = adata.obs[class_key]
-        ndata.uns['_ontovae']['class'] = pd.factorize(adata.obs[class_key])[0]
+        ndata.obs['_ontovae_classcol'] = ndata.obs[class_key]
+        ndata.obs['_ontovae_class'] = pd.factorize(ndata.obs[class_key])[0]
 
     # register SCVI fields
     ndata = ndata.copy()
