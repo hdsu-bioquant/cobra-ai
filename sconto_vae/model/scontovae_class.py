@@ -484,7 +484,7 @@ class OntoVAEclass(scOntoVAE):
             x = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
             cat_list = torch.split(minibatch[1].T.to(self.device), 1)
             _, _, _, class_output = self.forward(x, cat_list)
-            pred_classes.append(class_output.to('cpu').detach().numpy())
+            pred_classes.extend(class_output.to('cpu').detach().numpy())
         y_pred = np.argmax(np.array(pred_classes),axis=1)
 
         return y_pred
