@@ -602,7 +602,7 @@ class scOntoVAE(nn.Module):
 
     
     @torch.no_grad()
-    def perturbation(self, adata: AnnData=None, indices=None, genes: list=[], values: list=[], output='terms', terms=None, rec_genes=None, lin_layer=True):
+    def perturbation(self, adata: AnnData=None, genes: list=[], values: list=[], output='terms', terms=None, rec_genes=None, lin_layer=True):
         """
         Retrieves pathway activities or reconstructed gene values after performing in silico perturbation.
 
@@ -610,8 +610,6 @@ class scOntoVAE(nn.Module):
         ----------
         adata
             AnnData object that was processed with setup_anndata
-        indices
-            if activities are to be retrieved for a subset of samples
         genes
             a list of genes to perturb
         values
