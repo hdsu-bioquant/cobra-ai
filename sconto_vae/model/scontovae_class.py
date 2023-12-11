@@ -45,6 +45,8 @@ class OntoVAEclass(scOntoVAE):
         dropout rate in encoder
     average_neurons
         whether to average by neuronnum before passing terms to classifier
+    classify_latent
+        whether to only use latent space nodes as input to classifier
     
     Inherited Parameters (should be passed as dictionary to **kwargs)
     --------------------
@@ -109,6 +111,7 @@ class OntoVAEclass(scOntoVAE):
                  inject_covariates_class: bool = False,
                  drop_class: float = 0.2,
                  average_neurons: bool = False,
+                 classify_latent: bool = True,
                  **kwargs):
         super().__init__(adata, **kwargs)
 
@@ -120,19 +123,21 @@ class OntoVAEclass(scOntoVAE):
                         'bias_class': bias_class,
                         'inject_covariates_class': inject_covariates_class,
                         'drop_class': drop_class,
-                        'average_neurons': average_neurons}
+                        'average_neurons': average_neurons,
+                        'classify_latent': classify_latent}
         self.params.update(class_params)
 
         if '_ontovae_class' not in self.adata.obs:
             raise ValueError('Please specify the class_key in sconto_vae.module.utils.setup_anndata_ontovae.')
         
+        self.classify_latent = classify_latent
         self.n_terms = len(adata.uns['_ontovae']['annot'])
         self.n_classes = len(np.unique(adata.obs['_ontovae_class']))
         self.average_neurons = average_neurons
         self.class_features = self.n_terms if self.average_neurons else self.n_terms * self.neuronnum
 
         # Classifier
-        self.classifier = Classifier(in_features = self.class_features,
+        self.classifier = Classifier(in_features = self.latent_dim if self.classify_latent else self.class_features,
                                      n_classes = self.n_classes,
                                      n_cat_list = self.n_cat_list,
                                      layer_dims = layer_dims_class,
@@ -168,24 +173,28 @@ class OntoVAEclass(scOntoVAE):
         if self.use_activation_lat and self.use_activation_dec:
             z = self.activation_fn_dec()(z)
 
-        # attach hooks for classification
-        activation = {}
-        hooks = {}
-        self._attach_hooks(activation=activation, hooks=hooks)
+        if self.classify_latent:
+            class_output = self.classifier(z, cat_list)
+            reconstruction = self.decoder(z, cat_list)
+        else:
+            # attach hooks for classification
+            activation = {}
+            hooks = {}
+            self._attach_hooks(activation=activation, hooks=hooks)
 
-        # decoding
-        reconstruction = self.decoder(z, cat_list)
+            # decoding
+            reconstruction = self.decoder(z, cat_list)
 
-        # classification
-        act = torch.cat(list(activation.values()), dim=1)
-        act = torch.hstack((z,act))
-        if self.average_neurons:
-            act = torch.stack(list(torch.split(act, self.neuronnum, dim=1)), dim=0).mean(dim=2).T
-        class_output = self.classifier(act, cat_list)
+            # classification
+            act = torch.cat(list(activation.values()), dim=1)
+            act = torch.hstack((z,act))
+            if self.average_neurons:
+                act = torch.stack(list(torch.split(act, self.neuronnum, dim=1)), dim=0).mean(dim=2).T
+            class_output = self.classifier(act, cat_list)
 
-        # removal of hooks
-        for h in hooks:
-            hooks[h].remove()
+            # removal of hooks
+            for h in hooks:
+                hooks[h].remove()
             
         return reconstruction, mu, log_var, class_output
 
