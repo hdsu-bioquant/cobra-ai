@@ -38,6 +38,8 @@ class scOntoVAE(nn.Module):
         Which activation function to use in encoder
     bias_enc
         Whether to learn bias in linear layers or not in encoder
+    hidden_layers_enc
+        number of hidden layers in encoder (number of nodes is determined by neuronnum)
     inject_covariates_enc
         Whether to inject covariates in each layer (True), or just the first (False) of encoder
     drop_enc
@@ -85,6 +87,7 @@ class scOntoVAE(nn.Module):
                  use_activation_enc: bool = True,
                  activation_fn_enc: nn.Module = nn.ReLU,
                  bias_enc: bool = True,
+                 hidden_layers_enc: int=1, 
                  inject_covariates_enc: bool = False,
                  drop_enc: float = 0.2, 
                  z_drop: float = 0.5,
@@ -105,6 +108,7 @@ class scOntoVAE(nn.Module):
                           'use_activation_enc': use_activation_enc,
                           'activation_fn_enc': str(activation_fn_enc).split("'")[1] if activation_fn_enc is not None else activation_fn_enc,
                           'bias_enc': bias_enc,
+                          'hidden_layers_enc': hidden_layers_enc,
                           'inject_covariates_enc': inject_covariates_enc,
                           'drop_enc': drop_enc,
                           'z_drop': z_drop,
@@ -153,7 +157,7 @@ class scOntoVAE(nn.Module):
         self.encoder = Encoder(in_features = self.in_features,
                                 latent_dim = self.latent_dim,
                                 n_cat_list = self.n_cat_list,
-                                layer_dims = self.layer_dims_enc,
+                                layer_dims = self.layer_dims_enc * hidden_layers_enc,
                                 use_batch_norm = use_batch_norm_enc,
                                 use_layer_norm = use_layer_norm_enc,
                                 use_activation = use_activation_enc,
