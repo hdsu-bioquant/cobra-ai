@@ -195,11 +195,11 @@ class OntoVAEcpa(scOntoVAE):
         z_cov = {}
         z_total = z_basal.clone()
         for key in covars_embeddings.keys():
-            z_cov['z_' + key] = (z_basal + covars_embeddings[key]).to('cpu').detach().numpy()
+            z_cov['z_' + key] = (z_basal + covars_embeddings[key])
             z_total += covars_embeddings[key]
 
-        z_dict = dict(z_basal=z_basal.to('cpu').detach().numpy())
-        z_dict.update(z_cov, z_total=z_total.to('cpu').detach().numpy())
+        z_dict = dict(z_basal=z_basal)
+        z_dict.update(z_cov, z_total=z_total)
 
         return z_dict
   
@@ -524,31 +524,38 @@ class OntoVAEcpa(scOntoVAE):
         # set to eval mode
         self.eval()
 
-        # get latent space embedding
-        z = self._get_embedding(x, cat_list)
-        z = z.to('cpu').detach().numpy()
+        # get latent space embedding dict
+        zdict = self._get_embedding(x, cat_list, cov_list)
+        dict_keys = list(zdict.keys())
 
-        # initialize activations and hooks
-        activation = {}
-        hooks = {}
+        # pass forward the different z's
+        act_dict = {}
 
-        # attach the hooks
-        self._attach_hooks(lin_layer=lin_layer, activation=activation, hooks=hooks)
+        for z_key in dict_keys:
+            z = zdict[z_key].clone()
 
-        # pass data through model
-        reconstruction, _, _, _ = self.forward(x, cat_list, cov_list, mixup_lambda=0)
+            # initialize activations and hooks
+            activation = {}
+            hooks = {}
 
-        act = torch.cat(list(activation.values()), dim=1).to('cpu').detach().numpy()
+            # attach the hooks
+            self._attach_hooks(lin_layer=lin_layer, activation=activation, hooks=hooks)
+
+            # pass data through model
+            reconstruction = self.decoder(zdict[z_key], cat_list)
+
+            act = torch.cat(list(activation.values()), dim=1)
         
-        # remove hooks
-        for h in hooks:
-            hooks[h].remove()
+            # remove hooks
+            for h in hooks:
+                hooks[h].remove()
 
-        # return pathway activities or reconstructed gene values
-        if output == 'act':
-            return np.hstack((z,act))
-        if output == 'rec':
-            return reconstruction.to('cpu').detach().numpy()
+            # return pathway activities or reconstructed gene values
+            if output == 'act':
+                act_dict[z_key] = torch.hstack((z,act))
+            if output == 'rec':
+                act_dict[z_key] = reconstruction
+        return act_dict
 
     @torch.no_grad()
     def to_latent(self, adata: AnnData=None):
@@ -582,7 +589,7 @@ class OntoVAEcpa(scOntoVAE):
             cat_list = torch.split(minibatch[1].T.to(self.device), 1)
             cov_list = torch.split(minibatch[2].T.to(self.device), 1)
             embed_dict = self._get_embedding(x, cat_list, cov_list)
-            embed_dict_avg = {k: self._average_neuronnum(v) for k, v in embed_dict.items()}
+            embed_dict_avg = {k: self._average_neuronnum(v.to('cpu').detach().numpy()) for k, v in embed_dict.items()}
             embed.append(embed_dict_avg)
         key_list = list(embed[0].keys())
         embed_dict = {}
@@ -627,20 +634,23 @@ class OntoVAEcpa(scOntoVAE):
             x = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
             cat_list = torch.split(minibatch[1].T.to(self.device), 1)
             cov_list = torch.split(minibatch[2].T.to(self.device), 1)
-
-            a = self._pass_data(x, cat_list, 'act', lin_layer)
-            aavg = self._average_neuronnum(a)
-            act.append(aavg)
-        act = np.vstack(act)
+            act_dict = self._pass_data(x, cat_list, cov_list, 'act', lin_layer)
+            act_dict_avg = {k: self._average_neuronnum(v.to('cpu').detach().numpy()) for k, v in act_dict.items()}
+            act.append(act_dict_avg)
+        key_list = list(act[0].keys())
+        act_dict = {}
+        for key in key_list:
+            act_key = np.vstack([a[key] for a in act])
+            act_dict[key] = act_key
 
         # if term was specified, subset
         if terms is not None:
             annot = adata.uns['_ontovae']['annot']
             term_ind = annot[annot.ID.isin(terms)].index.to_numpy()
+            for key in key_list:
+                act_dict[key] = act_dict[key][:,term_ind]
 
-            act = act[:,term_ind]
-
-        return act
+        return act_dict
 
 
     @torch.no_grad()
@@ -670,23 +680,28 @@ class OntoVAEcpa(scOntoVAE):
                                          batch_size=128, 
                                          shuffle=False)
 
-        rec = []
+        act = []
         for minibatch in dataloader:
             x = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
             cat_list = torch.split(minibatch[1].T.to(self.device), 1)
-            r = self._pass_data(x, cat_list, 'rec')
-            ravg = self._average_neuronnum(r)
-            rec.append(ravg)
-        rec = np.vstack(rec)
+            cov_list = torch.split(minibatch[2].T.to(self.device), 1)
+            act_dict = self._pass_data(x, cat_list, cov_list, 'act', lin_layer)
+            act_dict_avg = {k: self._average_neuronnum(v.to('cpu').detach().numpy()) for k, v in act_dict.items()}
+            act.append(act_dict_avg)
+        key_list = list(act[0].keys())
+        act_dict = {}
+        for key in key_list:
+            act_key = np.vstack([a[key] for a in act])
+            act_dict[key] = act_key
 
-        # if genes were passed, subset
+        # if term was specified, subset
         if rec_genes is not None:
             onto_genes = adata.uns['_ontovae']['genes']
             gene_ind = np.array([onto_genes.index(g) for g in rec_genes])
+            for key in key_list:
+                act_dict[key] = act_dict[key][:,gene_ind]
 
-            rec = rec[:,gene_ind]
-
-        return rec
+        return act_dict
 
     
     @torch.no_grad()
@@ -736,42 +751,35 @@ class OntoVAEcpa(scOntoVAE):
                                          shuffle=False)
 
         # get pathway activities or reconstructed values after perturbation
-        res = []
+        out = 'act' if output == 'terms' else 'rec'
+
+        act = []
         for minibatch in dataloader:
             x = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
             cat_list = torch.split(minibatch[1].T.to(self.device), 1)
-            if output == 'terms':
-                r = self._pass_data(x, cat_list, 'act', lin_layer)
-                ravg = self._average_neuronnum(r)
-                res.append(ravg)
-            if output == 'genes':
-                r = self._pass_data(x, cat_list, 'rec')
-                ravg = self._average_neuronnum(r)
-                res.append(ravg)
+            cov_list = torch.split(minibatch[2].T.to(self.device), 1)
+            act_dict = self._pass_data(x, cat_list, cov_list, out, lin_layer)
+            act_dict_avg = {k: self._average_neuronnum(v.to('cpu').detach().numpy()) for k, v in act_dict.items()}
+            act.append(act_dict_avg)
+        key_list = list(act[0].keys())
+        act_dict = {}
+        for key in key_list:
+            act_key = np.vstack([a[key] for a in act])
+            act_dict[key] = act_key
 
-        # if term was specified, subset
         if terms is not None:
             annot = adata.uns['_ontovae']['annot']
             term_ind = annot[annot.ID.isin(terms)].index.to_numpy()
+            for key in key_list:
+                act_dict[key] = act_dict[key][:,term_ind]
 
-            res = res[:,term_ind]
-        
+        # if term was specified, subset
         if rec_genes is not None:
             onto_genes = adata.uns['_ontovae']['genes']
             gene_ind = np.array([onto_genes.index(g) for g in rec_genes])
+            for key in key_list:
+                act_dict[key] = act_dict[key][:,gene_ind]
 
-            res = res[:,gene_ind]
-
-        return res
-
-     
+        return act_dict
     
-  
         
-
-
-    
-
-
-
-

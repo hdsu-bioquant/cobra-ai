@@ -1,0 +1,11 @@
+/sconto_vae/data
+/sconto_vae/test 
+/sconto_vae/scenarios
+/sconto_vae/test/best_model.pt
+/sconto_vae/__pycache__
+/sconto_vae/model/__pycache__
+/sconto_vae/module/__pycache__
+/sconto_vae/vignettes/test.py
+/.neptune
+/.vscode
+/.devcontainer
