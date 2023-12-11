@@ -27,6 +27,7 @@ def setup_anndata_ontovae(adata: AnnData,
                 labels_key: Optional[str] = None,
                 categorical_covariate_keys: Optional[list[str]] = None,
                 class_key: Optional[str] = None,
+                cpa_keys: Optional[list[str]] = None, 
                 layer: Optional[str] = None):
     
     """
@@ -48,7 +49,11 @@ def setup_anndata_ontovae(adata: AnnData,
         labels_key
             Observation containing the labels
         categorical_covariate_keys
-            Observation to use as covariate keys
+            Observations to use as covariate keys
+        class_key
+            Observation to use as class (only for OntoVAE + classifier)
+        cpa_keys
+            Observations to use for disentanglement of latent space (only for OntoVAE + cpa)
         layer
             layer of AnnData containing the data
 
@@ -97,8 +102,10 @@ def setup_anndata_ontovae(adata: AnnData,
     ndata.uns['_ontovae']['masks'] = ontobj.extract_masks(top_thresh=top_thresh, bottom_thresh=bottom_thresh)
 
     if class_key is not None:
-        ndata.obs['_ontovae_classcol'] = ndata.obs[class_key]
-        ndata.obs['_ontovae_class'] = pd.factorize(ndata.obs[class_key])[0]
+        ndata.obs['_ontovae_class'] = pd.factorize(ndata.obs.loc[:,class_key])[0]
+    
+    if cpa_keys is not None:
+         ndata.obsm['_cpa_categorical_covs'] = ndata.obs.loc[:,cpa_keys].apply(lambda x: pd.factorize(x)[0])
 
     # register SCVI fields
     ndata = ndata.copy()
