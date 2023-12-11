@@ -388,6 +388,9 @@ class scOntoVAE(nn.Module):
                         }
         with open(modelpath + '/train_params.json', 'w') as fp:
             json.dump(train_params, fp, indent=4)
+        
+        if run is not None:
+            run["parameters"] = train_params
 
         # save model params
         with open(modelpath + '/model_params.json', 'w') as fp:
