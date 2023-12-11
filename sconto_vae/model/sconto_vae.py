@@ -394,11 +394,14 @@ class scOntoVAE(nn.Module):
             json.dump(train_params, fp, indent=4)
         
         if run is not None:
-            run["parameters"] = train_params
+            run["train_parameters"] = train_params
 
         # save model params
         with open(modelpath + '/model_params.json', 'w') as fp:
             json.dump(self.params, fp, indent=4)
+        
+        if run is not None:
+            run["model_parameters"] = self.params
 
         # train-val split
         train_adata, val_adata = split_adata(self.adata, 
