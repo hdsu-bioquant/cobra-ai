@@ -324,8 +324,10 @@ class Classifier(nn.Module):
         A list containing, for each category of interest,
         the number of categories. Each category will be
         included using a one-hot encoding.
-    layer_dims
-        list giving the dimensions of the hidden layers
+    hidden_layers
+        number of hidden layers
+    neurons_per_layer
+        number of neurons in a hidden layer
     use_batch_norm
         Whether to have `BatchNorm` layers or not
     use_layer_norm
@@ -345,7 +347,8 @@ class Classifier(nn.Module):
                  in_features: int, 
                  n_classes: int, 
                  n_cat_list: Iterable[int] = None,
-                 layer_dims: list = [64], 
+                 hidden_layers: int = 1,
+                 neurons_per_layer: int = 64,
                  use_batch_norm: bool = True,
                  use_layer_norm: bool = False,
                  use_activation: bool = True,
@@ -355,8 +358,8 @@ class Classifier(nn.Module):
                  drop: float = 0.2):
         super().__init__()
         self.in_features = in_features
-        self.layer_dims = layer_dims
-        self.layer_nums = [layer_dims[i:i+2] for i in range(len(layer_dims)-1)]
+        self.layer_dims = [neurons_per_layer] * hidden_layers
+        self.layer_nums = [self.layer_dims[i:i+2] for i in range(len(self.layer_dims)-1)]
         self.n_classes = n_classes
         self.drop = drop
         if n_cat_list is not None:

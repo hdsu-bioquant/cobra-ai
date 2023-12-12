@@ -29,8 +29,10 @@ class OntoVAEcpa(scOntoVAE):
     ----------
     adata
         anndata object that has been preprocessed with setup_anndata function
-    layer_dims_class
-        list containing the hidden layer dimensions of classifier
+    hidden_layers_class
+        number of hidden layers
+    neurons_per_class_layer
+        number of neurons in a hidden layer
     use_batch_norm_class
         Whether to have `BatchNorm` layers or not in encoder
     use_layer_norm_class
@@ -102,7 +104,8 @@ class OntoVAEcpa(scOntoVAE):
     
     def __init__(self, 
                  adata: AnnData, 
-                 layer_dims_class: list = [64],
+                 hidden_layers_class: int = 1,
+                 neurons_per_class_layer: int = 64,
                  use_batch_norm_class: bool = True,
                  use_layer_norm_class: bool = False,
                  use_activation_class: bool = True,
@@ -114,7 +117,8 @@ class OntoVAEcpa(scOntoVAE):
                  **kwargs):
         super().__init__(adata, **kwargs)
 
-        class_params = {'layer_dims_class': layer_dims_class,
+        class_params = {'hidden_layers_class': hidden_layers_class,
+                        'neurons_per_class_layer': neurons_per_class_layer,
                         'use_batch_norm_class': use_batch_norm_class,
                         'use_layer_norm_class': use_layer_norm_class,
                         'use_activation_class': use_activation_class,
@@ -149,7 +153,8 @@ class OntoVAEcpa(scOntoVAE):
                 key: Classifier(in_features = self.latent_dim,
                                 n_classes = len(self.cov_dict[key]),
                                 n_cat_list = self.n_cat_list,
-                                layer_dims = layer_dims_class,
+                                hidden_layers = hidden_layers_class,
+                                neurons_per_layer = neurons_per_class_layer,
                                 use_batch_norm = use_batch_norm_class,
                                 use_layer_norm = use_layer_norm_class,
                                 use_activation = use_activation_class,
