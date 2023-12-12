@@ -542,7 +542,7 @@ class OntoVAEcpa(scOntoVAE):
             self._attach_hooks(lin_layer=lin_layer, activation=activation, hooks=hooks)
 
             # pass data through model
-            reconstruction = self.decoder(zdict[z_key], cat_list)
+            reconstruction = self.decoder(z, cat_list)
 
             act = torch.cat(list(activation.values()), dim=1)
         
@@ -567,6 +567,8 @@ class OntoVAEcpa(scOntoVAE):
         adata
             AnnData object that was processed with setup_anndata
         """
+        self.eval()
+
         if adata is not None:
             if '_ontovae' not in adata.uns.keys():
                 raise ValueError('Please run sconto_vae.module.utils.setup_anndata first.')
@@ -613,6 +615,8 @@ class OntoVAEcpa(scOntoVAE):
         lin_layer
             whether linear layer should be used for calculation
         """
+        self.eval()
+
         if adata is not None:
             if '_ontovae' not in adata.uns.keys():
                 raise ValueError('Please run sconto_vae.module.utils.setup_anndata first.')
@@ -665,6 +669,7 @@ class OntoVAEcpa(scOntoVAE):
         rec_genes
             list of genes whose reconstructed values should be retrieved
         """
+        self.eval()
 
         if adata is not None:
             if '_ontovae' not in adata.uns.keys():
@@ -728,7 +733,8 @@ class OntoVAEcpa(scOntoVAE):
         lin_layer
             whether linear layer should be used for pathway activity retrieval
         """
-
+        self.eval()
+        
         if adata is not None:
             if '_ontovae' not in adata.uns.keys():
                 raise ValueError('Please run sconto_vae.module.utils.setup_anndata first.')
