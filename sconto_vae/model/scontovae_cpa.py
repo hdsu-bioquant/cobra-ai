@@ -695,7 +695,7 @@ class OntoVAEcpa(scOntoVAE):
             x = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
             cat_list = torch.split(minibatch[1].T.to(self.device), 1)
             cov_list = torch.split(minibatch[2].T.to(self.device), 1)
-            act_dict = self._pass_data(x, cat_list, cov_list, 'act', lin_layer)
+            act_dict = self._pass_data(x, cat_list, cov_list, 'rec', lin_layer=True)
             act_dict_avg = {k: self._average_neuronnum(v.to('cpu').detach().numpy()) for k, v in act_dict.items()}
             act.append(act_dict_avg)
         key_list = list(act[0].keys())
