@@ -9,8 +9,11 @@ from scvi.data.fields import CategoricalObsField, CategoricalJointObsField, Laye
 import anndata as ad
 from anndata import AnnData
 from sconto_vae.module.ontobj import Ontobj
-from typing import Optional, Union
+from typing import Optional
 from scipy import stats
+from sklearn.model_selection import StratifiedKFold
+from sklearn.naive_bayes import GaussianNB
+from sklearn import metrics
 from statsmodels.stats.multitest import fdrcorrection
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -256,6 +259,59 @@ def plot_scatter(adata: AnnData, color_by: list, act, term1: str, term2: str):
         plt.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.)
         plt.tight_layout()
         return fig, ax
+
+
+"""Classification based on pathway activities"""
+
+def calculate_auc(adata: AnnData, X: np.array, y: np.array, n_splits: int=10):
+    """
+    Performs sample classification on pathway activities using k-fold cross validation 
+    and outputs the ontology annotation with an additional column 'auc' 
+    that gives the median classification AUC for each term using a Naive Bayes Classifier
+
+    Parameters
+    ----------
+    adata
+        anndata that was used to calculate the pathway activities
+    X
+        2D numpy array of pathway activities
+    y
+        1D numpy array of binary class labels
+    n_splits
+        how many splits to use for cross-validation
+    """
+
+    def cross_val_auc(X, y, n_splits=n_splits):
+        # initialize aucs list
+        aucs = []
+
+        # cross-val
+        skf = StratifiedKFold(n_splits=n_splits, shuffle=True)
+
+        # iterate over folds
+        for train_ind, test_ind in skf.split(X,y,y):
+            X_train, X_test, y_train, y_test = X[train_ind], X[test_ind], y[train_ind], y[test_ind]
+
+            # train Naive Bayes
+            gnb = GaussianNB()
+            gnb.fit(X_train, y_train)
+
+            # make predictions
+            y_pred = gnb.predict(X_test)
+
+            # calculate AUC
+            fpr, tpr, _ = metrics.roc_curve(y_test, y_pred)
+            auc = metrics.auc(fpr, tpr)
+
+            # append to list
+            aucs.append(auc)
+
+        return np.nanmedian(np.array(auc))
+    
+    auc = [cross_val_auc(X[:,i].reshape(-1,1), y) for i in range(X.shape[1])]
+    annot = adata.uns['_ontovae']['annot']
+    annot['auc'] = auc
+    return annot
 
 
 
