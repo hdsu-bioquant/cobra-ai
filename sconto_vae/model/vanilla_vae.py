@@ -13,21 +13,27 @@ from typing import Iterable
 
 from anndata import AnnData
 
-from sconto_vae.module.modules import Encoder, OntoDecoder
+from sconto_vae.module.modules import Encoder, Decoder
 from sconto_vae.module.utils import split_adata, FastTensorDataLoader
 
 
-"""VAE with ontology in decoder"""
 
-class scOntoVAE(nn.Module):
+"""vanilla VAE"""
+
+class vanillaVAE(nn.Module):
     """
-    This class combines a normal encoder with an ontology structured decoder.
-    For now, works with log-normalized data,
+    vanilla VAE that works with anndata Object
 
     Parameters
     ----------
     adata
         anndata object that has been preprocessed with setup_anndata function
+    latent_dim
+        latent dimension
+    hidden_layers_enc
+        number of hidden layers in encoder
+    neurons_per_layer_enc
+        neurons per hidden layer in encoder
     use_batch_norm_enc
         Whether to have `BatchNorm` layers or not in encoder
     use_layer_norm_enc
@@ -38,16 +44,16 @@ class scOntoVAE(nn.Module):
         Which activation function to use in encoder
     bias_enc
         Whether to learn bias in linear layers or not in encoder
-    hidden_layers_enc
-        number of hidden layers in encoder (number of nodes is determined by neuronnum)
     inject_covariates_enc
         Whether to inject covariates in each layer (True), or just the first (False) of encoder
     drop_enc
         dropout rate in encoder
     z_drop
         dropout rate for latent space 
-    neuronnum
-        number of neurons per term in decoder
+    hidden_layers_dec
+        number of hidden layers in decoder
+    neurons_per_layer_dec
+        neurons per hidden layer in decoder
     use_batch_norm_dec
         Whether to have `BatchNorm` layers or not in decoder
     use_layer_norm_dec
@@ -82,37 +88,43 @@ class scOntoVAE(nn.Module):
 
     def __init__(self, 
                  adata: AnnData, 
+                 latent_dim: int = 128,
+                 hidden_layers_enc: int = 2,
+                 neurons_per_layer_enc: int = 256,
                  use_batch_norm_enc: bool = True,
                  use_layer_norm_enc: bool = False,
                  use_activation_enc: bool = True,
                  activation_fn_enc: nn.Module = nn.ReLU,
                  bias_enc: bool = True,
-                 hidden_layers_enc: int=1, 
                  inject_covariates_enc: bool = False,
                  drop_enc: float = 0.2, 
                  z_drop: float = 0.5,
-                 neuronnum: int = 3,
-                 use_batch_norm_dec: bool = False,
+                 hidden_layers_dec: int = 2,
+                 neurons_per_layer_dec: int = 256,
+                 use_batch_norm_dec: bool = True,
                  use_layer_norm_dec: bool = False,
-                 use_activation_dec: bool = False,
+                 use_activation_dec: bool = True,
                  use_activation_lat: bool = False,
-                 activation_fn_dec: nn.Module = nn.Tanh,
+                 activation_fn_dec: nn.Module = nn.ReLU,
                  bias_dec: bool = True,
                  inject_covariates_dec: bool = False,
                  drop_dec: float = 0):
         super().__init__()
 
         # store init params in dict
-        self.params = {'use_batch_norm_enc': use_batch_norm_enc,
+        self.params = {'latent_dim': latent_dim,
+                       'hidden_layers_enc': hidden_layers_enc,
+                       'neurons_per_layer_enc': neurons_per_layer_enc,
+                          'use_batch_norm_enc': use_batch_norm_enc,
                           'use_layer_norm_enc': use_layer_norm_enc,
                           'use_activation_enc': use_activation_enc,
                           'activation_fn_enc': str(activation_fn_enc).split("'")[1] if activation_fn_enc is not None else activation_fn_enc,
                           'bias_enc': bias_enc,
-                          'hidden_layers_enc': hidden_layers_enc,
                           'inject_covariates_enc': inject_covariates_enc,
                           'drop_enc': drop_enc,
                           'z_drop': z_drop,
-                          'neuronnum': neuronnum,
+                          'hidden_layers_dec': hidden_layers_dec,
+                          'neurons_per_layer_dec': neurons_per_layer_dec,
                           'use_batch_norm_dec': use_batch_norm_dec,
                           'use_layer_norm_dec': use_layer_norm_dec,
                           'use_activation_dec': use_activation_dec,
@@ -125,24 +137,11 @@ class scOntoVAE(nn.Module):
 
         self.adata = adata
 
-        if '_ontovae' not in self.adata.uns.keys():
-            raise ValueError('Please run sconto_vae.module.utils.setup_anndata_ontovae first.')
-
-        # parse OntoVAE information
-        self.thresholds = adata.uns['_ontovae']['thresholds']
-        self.in_features = len(self.adata.uns['_ontovae']['genes'])
-        self.mask_list = adata.uns['_ontovae']['masks']
-        self.mask_list = [torch.tensor(m, dtype=torch.float32) for m in self.mask_list]
-        self.layer_dims_dec =  np.array([self.mask_list[0].shape[1]] + [m.shape[0] for m in self.mask_list])
-        self.latent_dim = self.layer_dims_dec[0] * neuronnum
-        self.neurons_per_layer_enc = [self.latent_dim]
-
-        # additional info
-        self.neuronnum = neuronnum
-        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        self.use_activation_dec = use_activation_dec
+        # parse information
+        self.in_features = self.adata.shape[1]
+        self.latent_dim = latent_dim
         self.use_activation_lat = use_activation_lat
-        self.activation_fn_dec = activation_fn_dec
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
         # parse SCVI information
         self.batch = adata.obs['_scvi_batch']
@@ -158,7 +157,7 @@ class scOntoVAE(nn.Module):
                                 latent_dim = self.latent_dim,
                                 n_cat_list = self.n_cat_list,
                                 hidden_layers = hidden_layers_enc,
-                                neurons_per_layer = self.neurons_per_layer_enc, 
+                                neurons_per_layer = neurons_per_layer_enc, 
                                 use_batch_norm = use_batch_norm_enc,
                                 use_layer_norm = use_layer_norm_enc,
                                 use_activation = use_activation_enc,
@@ -169,19 +168,18 @@ class scOntoVAE(nn.Module):
                                 z_drop = z_drop)
 
         # Decoder
-        self.decoder = OntoDecoder(in_features = self.in_features,
-                                    layer_dims = self.layer_dims_dec,
-                                    mask_list = self.mask_list,
-                                    latent_dim = self.latent_dim,
-                                    neuronnum = self.neuronnum,
-                                    n_cat_list = self.n_cat_list,
-                                    use_batch_norm = use_batch_norm_dec,
-                                    use_layer_norm = use_layer_norm_dec,
-                                    use_activation = use_activation_dec,
-                                    activation_fn = activation_fn_dec,
-                                    bias = bias_dec,
-                                    inject_covariates = inject_covariates_dec,
-                                    drop = drop_dec)
+        self.decoder = Decoder(in_features = self.in_features,
+                                latent_dim = self.latent_dim,
+                                n_cat_list = self.n_cat_list,
+                                hidden_layers = hidden_layers_dec,
+                                neurons_per_layer = neurons_per_layer_dec,
+                                use_batch_norm = use_batch_norm_dec,
+                                use_layer_norm = use_layer_norm_dec,
+                                use_activation = use_activation_dec,
+                                activation_fn = activation_fn_dec,
+                                bias = bias_dec,
+                                inject_covariates = inject_covariates_dec,
+                                drop = drop_dec)
 
         self.to(self.device)
 
@@ -243,7 +241,7 @@ class scOntoVAE(nn.Module):
 
         mu, log_var = self.encoder(x, cat_list)
         z = self.reparameterize(mu, log_var)
-        if self.use_activation_lat and self.use_activation_dec:
+        if self.use_activation_lat:
             z = self.activation_fn_dec()(z)
         reconstruction = self.decoder(z, cat_list)
         return reconstruction, mu, log_var
@@ -298,16 +296,8 @@ class scOntoVAE(nn.Module):
             # backward propagation
             loss.backward()
 
-            # zero out gradients from non-existent connections
-            for i in range(len(self.decoder.decoder)):
-                self.decoder.decoder[i][0].weight.grad = torch.mul(self.decoder.decoder[i][0].weight.grad, self.decoder.masks[i])
-
             # perform optimizer step
             optimizer.step()
-
-            # make weights in Onto module positive
-            for i in range(len(self.decoder.decoder)):
-                self.decoder.decoder[i][0].weight.data = self.decoder.decoder[i][0].weight.data.clamp(0)
 
         # compute avg training loss
         train_loss = running_loss/len(dataloader)
@@ -450,93 +440,19 @@ class scOntoVAE(nn.Module):
             print(f"Val Loss: {val_epoch_loss:.4f}")     
 
 
-    def _get_activation(self, index, activation={}):
-        def hook(model, input, output):
-            activation[index] = output
-        return hook 
-    
-    def _attach_hooks(self, lin_layer=True, activation={}, hooks={}):
-        """helper function to attach hooks to the decoder"""
-        for i in range(len(self.decoder.decoder)-1):
-            key = str(i)
-            hook_ind=0 if lin_layer else np.where(np.array(self.decoder.decoder[i]) != None)[0][-1]
-            value = self.decoder.decoder[i][hook_ind].register_forward_hook(self._get_activation(i, activation))
-            hooks[key] = value
-
-
     @torch.no_grad()
-    def _pass_data(self, x, cat_list, output, lin_layer=True):
+    def to_latent(self, adata: AnnData=None):
         """
-        Passes data through the model.
-
-        Parameters
-        ----------
-        x
-            torch.tensor of shape (minibatch, in_features)
-        cat_list
-            Iterable of torch.tensors containing the category memberships
-            shape of each tensor is (minibatch, 1)
-        output
-            'act': return pathway activities
-            'rec': return reconstructed values
-        lin_layer:
-            whether hooks should be attached to linear layer of the model
-        """
-
-        # set to eval mode
-        self.eval()
-
-        # get latent space embedding
-        z = self._get_embedding(x, cat_list)
-        z = z.to('cpu').detach().numpy()
-
-        # initialize activations and hooks
-        activation = {}
-        hooks = {}
-
-        # attach the hooks
-        self._attach_hooks(lin_layer=lin_layer, activation=activation, hooks=hooks)
-
-        # pass data through model
-        reconstruction, _, _ = self.forward(x, cat_list)
-
-        act = torch.cat(list(activation.values()), dim=1).to('cpu').detach().numpy()
-        
-        # remove hooks
-        for h in hooks:
-            hooks[h].remove()
-
-        # return pathway activities or reconstructed gene values
-        if output == 'act':
-            return np.hstack((z,act))
-        if output == 'rec':
-            return reconstruction.to('cpu').detach().numpy()
-
-    def _average_neuronnum(self, act: np.array):
-        """
-        Helper function to calculate the average value of multiple neurons.
-        """
-        act = np.array(np.split(act, act.shape[1]/self.neuronnum, axis=1)).mean(axis=2).T
-        return act
-
-    @torch.no_grad()
-    def get_pathway_activities(self, adata: AnnData=None, terms=None, lin_layer=True):
-        """
-        Retrieves pathway activities from latent space and decoder.
+        Retrieves reconstructed values from output layer.
 
         Parameters
         ----------
         adata
-            AnnData object that was processed with setup_anndata
-        terms
-            list of ontology term ids whose activities should be retrieved
-        lin_layer
-            whether linear layer should be used for calculation
+            AnnData object that was processed with setup_anndata_vanillavae
         """
-        if adata is not None:
-            if '_ontovae' not in adata.uns.keys():
-                raise ValueError('Please run sconto_vae.module.utils.setup_anndata first.')
-        else:
+        self.eval()
+
+        if adata is None:
             adata = self.adata
 
         covs = self._cov_tensor(adata)
@@ -547,42 +463,30 @@ class scOntoVAE(nn.Module):
                                          batch_size=128, 
                                          shuffle=False)
 
-        act = []
+        embed = []
         for minibatch in dataloader:
             x = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
             cat_list = torch.split(minibatch[1].T.to(self.device), 1)
-            a = self._pass_data(x, cat_list, 'act', lin_layer)
-            aavg = self._average_neuronnum(a)
-            act.append(aavg)
-        act = np.vstack(act)
+            embedding = self._get_embedding(x, cat_list)
+            embed.append(embedding.to('cpu').detach().numpy())
+        embed = np.vstack(embed)
 
-        # if term was specified, subset
-        if terms is not None:
-            annot = adata.uns['_ontovae']['annot']
-            term_ind = annot[annot.ID.isin(terms)].index.to_numpy()
-
-            act = act[:,term_ind]
-
-        return act
+        return embed
 
 
     @torch.no_grad()
-    def get_reconstructed_values(self, adata: AnnData=None, rec_genes=None):
+    def get_reconstructed_values(self, adata: AnnData=None):
         """
         Retrieves reconstructed values from output layer.
 
         Parameters
         ----------
         adata
-            AnnData object that was processed with setup_anndata
-        rec_genes
-            list of genes whose reconstructed values should be retrieved
+            AnnData object that was processed with setup_anndata_vanillavae
         """
+        self.eval()
 
-        if adata is not None:
-            if '_ontovae' not in adata.uns.keys():
-                raise ValueError('Please run sconto_vae.module.utils.setup_anndata first.')
-        else:
+        if adata is None:
             adata = self.adata
 
         covs = self._cov_tensor(adata)
@@ -597,23 +501,15 @@ class scOntoVAE(nn.Module):
         for minibatch in dataloader:
             x = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
             cat_list = torch.split(minibatch[1].T.to(self.device), 1)
-            r = self._pass_data(x, cat_list, 'rec')
-            ravg = self._average_neuronnum(r)
-            rec.append(ravg)
+            reconstruction, _, _ = self.forward(x, cat_list)
+            rec.append(reconstruction.to('cpu').detach().numpy())
         rec = np.vstack(rec)
-
-        # if genes were passed, subset
-        if rec_genes is not None:
-            onto_genes = adata.uns['_ontovae']['genes']
-            gene_ind = np.array([onto_genes.index(g) for g in rec_genes])
-
-            rec = rec[:,gene_ind]
 
         return rec
 
     
     @torch.no_grad()
-    def perturbation(self, adata: AnnData=None, genes: list=[], values: list=[], output='terms', terms=None, rec_genes=None, lin_layer=True):
+    def perturbation(self, adata: AnnData=None, genes: list=[], values: list=[]):
         """
         Retrieves pathway activities or reconstructed gene values after performing in silico perturbation.
 
@@ -625,26 +521,14 @@ class scOntoVAE(nn.Module):
             a list of genes to perturb
         values
             list with new values, same length as genes
-        output
-            - 'terms': retrieve pathway activities
-            - 'genes': retrieve reconstructed values
-
-        terms
-            list of ontology term ids whose values should be retrieved
-        rec_genes
-            list of genes whose values should be retrieved
-        lin_layer
-            whether linear layer should be used for pathway activity retrieval
         """
+        self.eval()
 
-        if adata is not None:
-            if '_ontovae' not in adata.uns.keys():
-                raise ValueError('Please run sconto_vae.module.utils.setup_anndata first.')
-        else:
+        if adata is None:
             adata = self.adata
 
         # get indices of the genes in list
-        gindices = [self.adata.uns['_ontovae']['genes'].index(g) for g in genes]
+        gindices = [list(adata.var_names).index(g) for g in genes]
 
         # replace their values
         for i in range(len(genes)):
@@ -658,36 +542,21 @@ class scOntoVAE(nn.Module):
                                          batch_size=128, 
                                          shuffle=False)
 
-        # get pathway activities or reconstructed values after perturbation
-        res = []
+        rec = []
         for minibatch in dataloader:
             x = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
             cat_list = torch.split(minibatch[1].T.to(self.device), 1)
-            if output == 'terms':
-                r = self._pass_data(x, cat_list, 'act', lin_layer)
-                ravg = self._average_neuronnum(r)
-                res.append(ravg)
-            if output == 'genes':
-                r = self._pass_data(x, cat_list, 'rec')
-                ravg = self._average_neuronnum(r)
-                res.append(ravg)
+            reconstruction, _, _ = self.forward(x, cat_list)
+            rec.append(reconstruction.to('cpu').detach().numpy())
+        rec = np.vstack(rec)
 
-        # if term was specified, subset
-        if terms is not None:
-            annot = adata.uns['_ontovae']['annot']
-            term_ind = annot[annot.ID.isin(terms)].index.to_numpy()
-
-            res = res[:,term_ind]
-        
-        if rec_genes is not None:
-            onto_genes = adata.uns['_ontovae']['genes']
-            gene_ind = np.array([onto_genes.index(g) for g in rec_genes])
-
-            res = res[:,gene_ind]
-
-        return res
+        return rec
         
 
 
     
+
+
+
+
 
