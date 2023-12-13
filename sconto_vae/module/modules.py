@@ -244,11 +244,11 @@ class Decoder(nn.Module):
                 bias = bias,
                 inject_covariates = inject_covariates,
                 drop = self.drop
-            ) for x in self.layer_nums[:-1]] +
+            ) for x in self.layer_nums] +
 
             [
                 nn.Sequential(
-                    nn.Linear(self.layer_nums[-1][0] + self.cat_dim * self.inject_covariates, self.in_features)
+                    nn.Linear(self.layer_nums[-1][1] + self.cat_dim * self.inject_covariates, self.in_features)
                 )
             ]
             ).to(self.device)
