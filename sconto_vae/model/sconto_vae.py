@@ -135,7 +135,7 @@ class scOntoVAE(nn.Module):
         self.mask_list = [torch.tensor(m, dtype=torch.float32) for m in self.mask_list]
         self.layer_dims_dec =  np.array([self.mask_list[0].shape[1]] + [m.shape[0] for m in self.mask_list])
         self.latent_dim = self.layer_dims_dec[0] * neuronnum
-        self.layer_dims_enc = [self.latent_dim]
+        self.neurons_per_layer_enc = [self.latent_dim]
 
         # additional info
         self.neuronnum = neuronnum
@@ -157,7 +157,8 @@ class scOntoVAE(nn.Module):
         self.encoder = Encoder(in_features = self.in_features,
                                 latent_dim = self.latent_dim,
                                 n_cat_list = self.n_cat_list,
-                                layer_dims = self.layer_dims_enc * hidden_layers_enc,
+                                hidden_layers = hidden_layers_enc,
+                                neurons_per_layer = self.neurons_per_layer_enc, 
                                 use_batch_norm = use_batch_norm_enc,
                                 use_layer_norm = use_layer_norm_enc,
                                 use_activation = use_activation_enc,

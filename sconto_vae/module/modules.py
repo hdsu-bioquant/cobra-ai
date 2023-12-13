@@ -21,6 +21,10 @@ class Encoder(nn.Module):
         A list containing, for each category of interest,
         the number of categories. Each category will be
         included using a one-hot encoding.
+    hidden_layers
+        number of hidden layers in encoder
+    neurons_per_layer
+        number of neurons per hidden layer
     layer_dims
         list giving the dimensions of the hidden layers
     use_batch_norm
@@ -45,7 +49,8 @@ class Encoder(nn.Module):
                  in_features: int, 
                  latent_dim: int, 
                  n_cat_list: Iterable[int] = None,
-                 layer_dims: list = [512], 
+                 hidden_layers: int = 1,
+                 neurons_per_layer: int = 512,
                  use_batch_norm: bool = True,
                  use_layer_norm: bool = False,
                  use_activation: bool = True,
@@ -57,8 +62,8 @@ class Encoder(nn.Module):
         super().__init__()
 
         self.in_features = in_features
-        self.layer_dims = layer_dims
-        self.layer_nums = [layer_dims[i:i+2] for i in range(len(layer_dims)-1)]
+        self.layer_dims = [neurons_per_layer] * hidden_layers
+        self.layer_nums = [self.layer_dims[i:i+2] for i in range(len(self.layer_dims)-1)]
         self.latent_dim = latent_dim
         self.drop = drop
         self.z_drop = z_drop
