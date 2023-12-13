@@ -128,6 +128,77 @@ def setup_anndata_ontovae(adata: AnnData,
     return ndata
 
 
+def setup_anndata_vanillavae(adata: AnnData,
+                batch_key: Optional[str] = None,
+                labels_key: Optional[str] = None,
+                categorical_covariate_keys: Optional[list[str]] = None,
+                class_key: Optional[str] = None,
+                cpa_keys: Optional[list[str]] = None, 
+                layer: Optional[str] = None):
+    
+    """
+    Sets up anndata for the Vanilla VAE.
+    Also creates scvi fields for batch and covariates.
+
+    Parameters
+    ----------
+        adata
+            Scanpy single-cell AnnData object
+        batch_key
+            Observation to be used as batch
+        labels_key
+            Observation containing the labels
+        categorical_covariate_keys
+            Observations to use as covariate keys
+        class_key
+            Observation to use as class (only for OntoVAE + classifier)
+        cpa_keys
+            Observations to use for disentanglement of latent space (only for OntoVAE + cpa)
+        layer
+            layer of AnnData containing the data
+
+    Returns
+    -------
+        ndata
+            updated object if copy is True
+    """
+
+    if adata.is_view:
+        raise ValueError(
+            "Current adata object is a View. Please run `adata = adata.copy()`"
+        )
+    
+    if layer is not None:
+         adata.X = adata.layers[layer].copy()
+        
+    if len(list(adata.layers.keys())) > 0:
+        for k in list(adata.layers.keys()):
+            del adata.layers[k]
+
+    if class_key is not None:
+        adata.obs['_ontovae_class'] = pd.factorize(adata.obs.loc[:,class_key])[0]
+    
+    if cpa_keys is not None:
+         adata.obsm['_cpa_categorical_covs'] = adata.obs.loc[:,cpa_keys].apply(lambda x: pd.factorize(x)[0])
+
+    # register SCVI fields
+    adata = adata.copy()
+    anndata_fields = [
+            LayerField(REGISTRY_KEYS.X_KEY, layer=None, is_count_data=False),
+            CategoricalObsField(REGISTRY_KEYS.BATCH_KEY, batch_key),
+            CategoricalObsField(REGISTRY_KEYS.LABELS_KEY, labels_key),
+            CategoricalJointObsField(
+                REGISTRY_KEYS.CAT_COVS_KEY, categorical_covariate_keys
+            )
+        ]
+    adata_manager = AnnDataManager(
+        fields=anndata_fields
+    )
+    adata_manager.register_fields(adata)
+    
+    return adata
+
+
 
 def split_adata(adata: AnnData, train_size: float = 0.9, seed: int = 42):
     """
