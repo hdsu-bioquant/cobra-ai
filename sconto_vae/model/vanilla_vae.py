@@ -108,7 +108,7 @@ class vanillaVAE(nn.Module):
                  activation_fn_dec: nn.Module = nn.ReLU,
                  bias_dec: bool = True,
                  inject_covariates_dec: bool = False,
-                 drop_dec: float = 0):
+                 drop_dec: float = 0.2):
         super().__init__()
 
         # store init params in dict
