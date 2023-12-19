@@ -248,7 +248,7 @@ class Decoder(nn.Module):
 
             [
                 nn.Sequential(
-                    nn.Linear(self.layer_nums[-1][1] + self.cat_dim * self.inject_covariates, self.in_features)
+                    nn.Linear(self.layer_dims[-1] + self.cat_dim * self.inject_covariates, self.in_features)
                 )
             ]
             ).to(self.device)
