@@ -548,7 +548,7 @@ class Classifier(nn.Module):
                     nn.Linear(self.layer_dims[-1] + self.cat_dim * inject_covariates, self.n_classes, bias=bias),
                     nn.BatchNorm1d(self.n_classes) if use_batch_norm else None,
                     nn.LayerNorm(self.n_classes) if use_layer_norm else None,
-                    nn.Softmax() if self.n_classes > 2 else nn.Sigmoid()
+                    nn.Softmax(dim=1) if self.n_classes > 2 else nn.Sigmoid()
                 )
             ]
 
