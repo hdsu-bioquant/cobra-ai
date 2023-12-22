@@ -135,7 +135,7 @@ class scOntoVAE(nn.Module):
         self.mask_list = [torch.tensor(m, dtype=torch.float32) for m in self.mask_list]
         self.layer_dims_dec =  np.array([self.mask_list[0].shape[1]] + [m.shape[0] for m in self.mask_list])
         self.latent_dim = self.layer_dims_dec[0] * neuronnum
-        self.neurons_per_layer_enc = [self.latent_dim]
+        self.neurons_per_layer_enc = self.latent_dim
 
         # additional info
         self.neuronnum = neuronnum
