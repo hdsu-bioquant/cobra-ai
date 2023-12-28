@@ -319,6 +319,8 @@ class OntoDecoder(nn.Module):
         list of tuples that define in and out for each layer
     mask_list
         matrix for each layer transition, that determines which weights to zero out
+    root_layer_latent
+        whether latent space layer is set as first ontology layer (True, default) or first decoder layer (False)
     latent_dim
         latent dimension
     neuronnum
@@ -347,7 +349,8 @@ class OntoDecoder(nn.Module):
                  in_features: int, 
                  layer_dims: list, 
                  mask_list: list, 
-                 latent_dim: int, 
+                 root_layer_latent: bool = True,
+                 latent_dim: int = 128, 
                  neuronnum: int = 3,
                  n_cat_list: Iterable[int] = None,
                  use_batch_norm: bool = False,
@@ -361,6 +364,8 @@ class OntoDecoder(nn.Module):
 
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.in_features = in_features
+        self.root_layer_latent = root_layer_latent
+        self.start_point = 0 if root_layer_latent else 1
         self.layer_dims = np.hstack([layer_dims[:-1] * neuronnum, layer_dims[-1]])
         self.layer_shapes = [(np.sum(self.layer_dims[:i+1]), self.layer_dims[i+1]) for i in range(len(self.layer_dims)-1)]
         self.masks = []
@@ -400,7 +405,24 @@ class OntoDecoder(nn.Module):
                     nn.Linear(self.layer_shapes[-1][0] + self.cat_dim, self.in_features)
                 )
             ]
-            ).to(self.device)
+            )
+        
+        if not root_layer_latent:
+            self.decoder.insert(0, 
+                build_block(ins = self.latent_dim,
+                            outs = self.layer_dims[0],
+                            cat_dim = self.cat_dim,
+                            use_batch_norm = use_batch_norm,
+                            use_layer_norm = use_layer_norm,
+                            use_activation = use_activation,
+                            activation_fn = activation_fn,
+                            bias = bias,
+                            inject_covariates = inject_covariates,
+                            drop = self.drop
+                            )
+            )
+
+        self.decoder.to(self.device)
         
         # attach covs to masks (set to 1s)
         if len(self.n_cat_list) > 0:
@@ -412,11 +434,11 @@ class OntoDecoder(nn.Module):
                 self.masks[-1] = torch.hstack((self.masks[-1], torch.ones(self.masks[-1].shape[0], self.cat_dim).to(self.device))) 
 
         # apply masks to zero out weights of non-existent connections
-        for i in range(len(self.decoder)):
-            self.decoder[i][0].weight.data = torch.mul(self.decoder[i][0].weight.data, self.masks[i])
+        for i in range(self.start_point,len(self.decoder)):
+            self.decoder[i][0].weight.data = torch.mul(self.decoder[i][0].weight.data, self.masks[i-self.start_point])
 
         # make all weights in decoder positive
-        for i in range(len(self.decoder)):
+        for i in range(self.start_point, len(self.decoder)):
             self.decoder[i][0].weight.data = self.decoder[i][0].weight.data.clamp(0)
 
 
@@ -440,9 +462,17 @@ class OntoDecoder(nn.Module):
                     categs.append(one_hot(cat.long(), n_cat).squeeze())
             categs = torch.hstack(categs)
 
+        if not self.root_layer_latent:
+            for layer in self.decoder[0]:
+                if layer is not None:
+                    if self.cat_dim > 0 and self.inject_covariates and isinstance(layer, nn.Linear):
+                        z = layer(torch.hstack((z, categs)))
+                    else:
+                        z = layer(z)
+        
         out = z.clone()
 
-        for block in self.decoder[:-1]:
+        for block in self.decoder[self.start_point:-1]:
             for layer in block:
                 if layer is not None:
                     if self.cat_dim > 0 and self.inject_covariates and isinstance(layer, nn.Linear):

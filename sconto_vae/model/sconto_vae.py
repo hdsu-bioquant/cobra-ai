@@ -46,6 +46,10 @@ class scOntoVAE(nn.Module):
         dropout rate in encoder
     z_drop
         dropout rate for latent space 
+    root_layer_latent
+        whether latent space layer is set as first ontology layer (True, default) or first decoder layer (False)
+    latent_dim
+        latent space dimension if root_layer_latent is False
     neuronnum
         number of neurons per term in decoder
     use_batch_norm_dec
@@ -91,6 +95,8 @@ class scOntoVAE(nn.Module):
                  inject_covariates_enc: bool = False,
                  drop_enc: float = 0.2, 
                  z_drop: float = 0.5,
+                 root_layer_latent: bool = True,
+                 latent_dim: int = 128,
                  neuronnum: int = 3,
                  use_batch_norm_dec: bool = False,
                  use_layer_norm_dec: bool = False,
@@ -112,6 +118,8 @@ class scOntoVAE(nn.Module):
                           'inject_covariates_enc': inject_covariates_enc,
                           'drop_enc': drop_enc,
                           'z_drop': z_drop,
+                          'root_layer_latent': root_layer_latent,
+                          'latent_dim': latent_dim,
                           'neuronnum': neuronnum,
                           'use_batch_norm_dec': use_batch_norm_dec,
                           'use_layer_norm_dec': use_layer_norm_dec,
@@ -134,7 +142,9 @@ class scOntoVAE(nn.Module):
         self.mask_list = adata.uns['_ontovae']['masks']
         self.mask_list = [torch.tensor(m, dtype=torch.float32) for m in self.mask_list]
         self.layer_dims_dec =  np.array([self.mask_list[0].shape[1]] + [m.shape[0] for m in self.mask_list])
-        self.latent_dim = self.layer_dims_dec[0] * neuronnum
+        self.root_layer_latent = root_layer_latent
+        self.start_point = 0 if self.root_layer_latent else 1
+        self.latent_dim = self.layer_dims_dec[0] * neuronnum if self.root_layer_latent else latent_dim
         self.neurons_per_layer_enc = self.latent_dim
 
         # additional info
@@ -172,6 +182,7 @@ class scOntoVAE(nn.Module):
         self.decoder = OntoDecoder(in_features = self.in_features,
                                     layer_dims = self.layer_dims_dec,
                                     mask_list = self.mask_list,
+                                    root_layer_latent = self.root_layer_latent,
                                     latent_dim = self.latent_dim,
                                     neuronnum = self.neuronnum,
                                     n_cat_list = self.n_cat_list,
@@ -299,14 +310,14 @@ class scOntoVAE(nn.Module):
             loss.backward()
 
             # zero out gradients from non-existent connections
-            for i in range(len(self.decoder.decoder)):
-                self.decoder.decoder[i][0].weight.grad = torch.mul(self.decoder.decoder[i][0].weight.grad, self.decoder.masks[i])
+            for i in range(self.start_point, len(self.decoder.decoder)):
+                self.decoder.decoder[i][0].weight.grad = torch.mul(self.decoder.decoder[i][0].weight.grad, self.decoder.masks[i-self.start_point])
 
             # perform optimizer step
             optimizer.step()
 
             # make weights in Onto module positive
-            for i in range(len(self.decoder.decoder)):
+            for i in range(self.start_point, len(self.decoder.decoder)):
                 self.decoder.decoder[i][0].weight.data = self.decoder.decoder[i][0].weight.data.clamp(0)
 
         # compute avg training loss
@@ -508,7 +519,10 @@ class scOntoVAE(nn.Module):
 
         # return pathway activities or reconstructed gene values
         if output == 'act':
-            return np.hstack((z,act))
+            if self.root_layer_latent:
+                return np.hstack((z,act))
+            else:
+                return act
         if output == 'rec':
             return reconstruction.to('cpu').detach().numpy()
 
