@@ -365,14 +365,14 @@ class OntoVAEcpa(scOntoVAE):
             loss.backward()
 
             # zero out gradients from non-existent connections
-            for i in range(len(self.decoder.decoder)):
-                self.decoder.decoder[i][0].weight.grad = torch.mul(self.decoder.decoder[i][0].weight.grad, self.decoder.masks[i])
+            for i in range(self.start_point, len(self.decoder.decoder)):
+                self.decoder.decoder[i][0].weight.grad = torch.mul(self.decoder.decoder[i][0].weight.grad, self.decoder.masks[i-self.start_point])
 
             # perform optimizer step
             optimizer_vae.step()
 
             # make weights in Onto module positive
-            for i in range(len(self.decoder.decoder)):
+            for i in range(self.start_point, len(self.decoder.decoder)):
                 self.decoder.decoder[i][0].weight.data = self.decoder.decoder[i][0].weight.data.clamp(0)
 
             # adversarial training
