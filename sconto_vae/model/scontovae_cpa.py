@@ -703,7 +703,10 @@ class OntoVAEcpa(scOntoVAE):
             cat_list = torch.split(minibatch[1].T.to(self.device), 1)
             cov_list = torch.split(minibatch[2].T.to(self.device), 1)
             embed_dict, _, _ = self._get_embedding(x, cat_list, cov_list)
-            embed_dict_avg = {k: self._average_neuronnum(v.to('cpu').detach().numpy()) for k, v in embed_dict.items()}
+            if self.root_layer_latent:
+                embed_dict_avg = {k: self._average_neuronnum(v.to('cpu').detach().numpy()) for k, v in embed_dict.items()}
+            else:
+                embed_dict_avg = {k: v.to('cpu').detach().numpy() for k, v in embed_dict.items()}
             embed.append(embed_dict_avg)
         key_list = list(embed[0].keys())
         embed_dict = {}
