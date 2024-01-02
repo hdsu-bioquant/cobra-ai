@@ -664,7 +664,10 @@ class OntoVAEcpa(scOntoVAE):
 
             # return pathway activities or reconstructed gene values
             if output == 'act':
-                act_dict[z_key] = torch.hstack((z,act))
+                if self.root_layer_latent:
+                    act_dict[z_key] = torch.hstack((z,act))
+                else:
+                    act_dict[z_key] = act
             if output == 'rec':
                 act_dict[z_key] = reconstruction
         return act_dict
