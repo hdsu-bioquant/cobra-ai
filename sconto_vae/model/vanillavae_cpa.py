@@ -776,7 +776,7 @@ class vanillaCPA(vanillaVAE):
             cov_list = torch.split(minibatch[2].T.to(self.device), 1)
             rec_dict = self._pass_data(x, cat_list, cov_list)
             rec.append({k: v.to('cpu').detach().numpy() for k, v in rec_dict.items()})
-        key_list = list(act[0].keys())
+        key_list = list(rec[0].keys())
         rec_dict = {}
         for key in key_list:
             act_key = np.vstack([a[key] for a in rec])
