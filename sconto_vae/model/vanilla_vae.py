@@ -9,7 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm
 
-from typing import Iterable
+from typing import Iterable, Literal
 
 from anndata import AnnData
 
@@ -412,8 +412,6 @@ class vanillaVAE(nn.Module):
         val_loss_min = float('inf')
         optimizer = optimizer(self.parameters(), lr = lr)
 
-
-
         for epoch in range(epochs):
             print(f"Epoch {epoch+1} of {epochs}")
             train_epoch_loss = self.train_round(trainloader, kl_coeff, optimizer, run)
@@ -438,7 +436,7 @@ class vanillaVAE(nn.Module):
     
 
     @torch.no_grad()
-    def _run_batches(self, dataloader: FastTensorDataLoader, latent: bool=True):
+    def _run_batches(self, dataloader: FastTensorDataLoader, retrieve: Literal['latent', 'rec']):
         """
         Runs batches of a dataloader through encoder or complete VAE and collects results.
 
@@ -451,7 +449,7 @@ class vanillaVAE(nn.Module):
         for minibatch in dataloader:
             x = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
             cat_list = torch.split(minibatch[1].T.to(self.device), 1)
-            if latent:
+            if retrieve == 'latent':
                 result, _, _ = self._get_embedding(x, cat_list)
             else:
                 _, _, _, result = self.forward(x, cat_list)
@@ -483,7 +481,7 @@ class vanillaVAE(nn.Module):
                                          batch_size=128, 
                                          shuffle=False)
 
-        res = self._run_batches(dataloader)
+        res = self._run_batches(dataloader, retrieve='latent')
 
         return res
 
@@ -511,7 +509,7 @@ class vanillaVAE(nn.Module):
                                          batch_size=128, 
                                          shuffle=False)
 
-        res = self._run_batches(dataloader, latent=False)
+        res = self._run_batches(dataloader, retrieve='rec')
 
         return res
 
