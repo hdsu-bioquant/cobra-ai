@@ -641,7 +641,7 @@ class vanillaCPA(vanillaVAE):
                 
 
     @torch.no_grad()
-    def _run_batches(self, dataloader: FastTensorDataLoader, retrieve: Literal['latent', 'rec']):
+    def _run_batches(self, adata: AnnData, retrieve: Literal['latent', 'rec']):
         """
         Runs batches of a dataloader through encoder or complete VAE and collects results.
 
@@ -651,6 +651,18 @@ class vanillaCPA(vanillaVAE):
             whether to retrieve latent space embedding (True) or reconstructed values (False)
         """
         self.eval()
+
+        if adata is None:
+            adata = self.adata
+
+        batch = self._cov_tensor(adata)
+        covs = self._cov_tensor(adata)
+
+        dataloader = FastTensorDataLoader(adata.X, 
+                                          batch,
+                                          covs,
+                                         batch_size=128, 
+                                         shuffle=False)
 
         res = []
         for minibatch in dataloader:
@@ -683,21 +695,7 @@ class vanillaCPA(vanillaVAE):
             AnnData object that was processed with setup_anndata
         """
         self.eval()
-
-        if adata is None:
-            adata = self.adata
-
-        batch = self._cov_tensor(adata)
-        covs = torch.tensor(adata.obsm['_cpa_categorical_covs'].to_numpy())
-
-        # generate dataloaders
-        dataloader = FastTensorDataLoader(adata.X, 
-                                          batch,
-                                          covs,
-                                         batch_size=128, 
-                                         shuffle=False)
-
-        res = self._run_batches(dataloader, 'latent')
+        res = self._run_batches(adata, 'latent')
         return res
 
 
@@ -712,21 +710,7 @@ class vanillaCPA(vanillaVAE):
             AnnData object that was processed with setup_anndata
         """
         self.eval()
-
-        if adata is None:
-            adata = self.adata
-
-        batch = self._cov_tensor(adata)
-        covs = self._cov_tensor(adata)
-
-        # generate dataloaders
-        dataloader = FastTensorDataLoader(adata.X, 
-                                          batch,
-                                          covs,
-                                         batch_size=128, 
-                                         shuffle=False)
-
-        res = self._run_batches(dataloader, 'rec')
+        res = self._run_batches(adata, 'rec')
         return res
 
     
@@ -760,7 +744,7 @@ class vanillaCPA(vanillaVAE):
             adata.X[:,gindices[i]] = values[i]
 
         # run perturbed data through network
-        res = self.get_reconstructed_values(adata)
+        res = self._run_batches(adata, 'rec')
 
         return res
     

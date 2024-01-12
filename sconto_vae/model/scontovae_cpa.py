@@ -669,7 +669,7 @@ class OntoVAEcpa(scOntoVAE):
         return act_dict
     
     @torch.no_grad()
-    def _run_batches(self, dataloader: FastTensorDataLoader, retrieve: Literal['latent', 'act', 'rec'], lin_layer: bool=True):
+    def _run_batches(self, adata: AnnData, retrieve: Literal['latent', 'act', 'rec'], lin_layer: bool=True):
         """
         Runs batches of a dataloader through encoder or complete VAE and collects results.
 
@@ -679,6 +679,21 @@ class OntoVAEcpa(scOntoVAE):
             whether to retrieve latent space embedding (True) or reconstructed values (False)
         """
         self.eval()
+
+        if adata is not None:
+            if '_ontovae' not in adata.uns.keys():
+                raise ValueError('Please run sconto_vae.module.utils.setup_anndata first.')
+        else:
+            adata = self.adata
+
+        batch = self._cov_tensor(adata)
+        covs = torch.tensor(adata.obsm['_cpa_categorical_covs'].to_numpy())
+
+        dataloader = FastTensorDataLoader(adata.X, 
+                                          batch,
+                                          covs,
+                                         batch_size=128, 
+                                         shuffle=False)
 
         res = []
         for minibatch in dataloader:
@@ -719,24 +734,7 @@ class OntoVAEcpa(scOntoVAE):
             AnnData object that was processed with setup_anndata
         """
         self.eval()
-
-        if adata is not None:
-            if '_ontovae' not in adata.uns.keys():
-                raise ValueError('Please run sconto_vae.module.utils.setup_anndata first.')
-        else:
-            adata = self.adata
-
-        batch = self._cov_tensor(adata)
-        covs = torch.tensor(adata.obsm['_cpa_categorical_covs'].to_numpy())
-
-        # generate dataloaders
-        dataloader = FastTensorDataLoader(adata.X, 
-                                          batch,
-                                          covs,
-                                         batch_size=128, 
-                                         shuffle=False)
-
-        res = self._run_batches(dataloader, retrieve='latent')
+        res = self._run_batches(adata, retrieve='latent')
         return res
     
     @torch.no_grad()
@@ -752,24 +750,7 @@ class OntoVAEcpa(scOntoVAE):
             whether linear layer should be used for calculation
         """
         self.eval()
-
-        if adata is not None:
-            if '_ontovae' not in adata.uns.keys():
-                raise ValueError('Please run sconto_vae.module.utils.setup_anndata first.')
-        else:
-            adata = self.adata
-
-        batch = self._cov_tensor(adata)
-        covs = torch.tensor(adata.obsm['_cpa_categorical_covs'].to_numpy())
-
-        # generate dataloaders
-        dataloader = FastTensorDataLoader(adata.X, 
-                                          batch,
-                                          covs,
-                                         batch_size=128, 
-                                         shuffle=False)
-
-        res = self._run_batches(dataloader, retrieve='act', lin_layer=lin_layer)
+        res = self._run_batches(adata, retrieve='act', lin_layer=lin_layer)
         return res
 
 
@@ -784,22 +765,5 @@ class OntoVAEcpa(scOntoVAE):
             AnnData object that was processed with setup_anndata
         """
         self.eval()
-
-        if adata is not None:
-            if '_ontovae' not in adata.uns.keys():
-                raise ValueError('Please run sconto_vae.module.utils.setup_anndata first.')
-        else:
-            adata = self.adata
-
-        batch = self._cov_tensor(adata)
-        covs = torch.tensor(adata.obsm['_cpa_categorical_covs'].to_numpy())
-
-        # generate dataloaders
-        dataloader = FastTensorDataLoader(adata.X, 
-                                          batch,
-                                          covs,
-                                         batch_size=128, 
-                                         shuffle=False)
-
-        res = self._run_batches(dataloader, retrieve='rec')
+        res = self._run_batches(adata, retrieve='rec')
         return res

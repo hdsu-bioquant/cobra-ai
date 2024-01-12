@@ -436,7 +436,7 @@ class vanillaVAE(nn.Module):
     
 
     @torch.no_grad()
-    def _run_batches(self, dataloader: FastTensorDataLoader, retrieve: Literal['latent', 'rec']):
+    def _run_batches(self, adata: AnnData, retrieve: Literal['latent', 'rec']):
         """
         Runs batches of a dataloader through encoder or complete VAE and collects results.
 
@@ -445,6 +445,18 @@ class vanillaVAE(nn.Module):
         latent
             whether to retrieve latent space embedding (True) or reconstructed values (False)
         """
+        self.eval()
+
+        if adata is None:
+            adata = self.adata
+
+        covs = self._cov_tensor(adata)
+
+        dataloader = FastTensorDataLoader(adata.X, 
+                                          covs,
+                                         batch_size=128, 
+                                         shuffle=False)
+        
         res = []
         for minibatch in dataloader:
             x = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
@@ -469,20 +481,7 @@ class vanillaVAE(nn.Module):
             AnnData object that was processed with setup_anndata_vanillavae
         """
         self.eval()
-
-        if adata is None:
-            adata = self.adata
-
-        covs = self._cov_tensor(adata)
-
-        # generate dataloaders
-        dataloader = FastTensorDataLoader(adata.X, 
-                                          covs,
-                                         batch_size=128, 
-                                         shuffle=False)
-
-        res = self._run_batches(dataloader, retrieve='latent')
-
+        res = self._run_batches(adata, retrieve='latent')
         return res
 
 
@@ -497,20 +496,7 @@ class vanillaVAE(nn.Module):
             AnnData object that was processed with setup_anndata_vanillavae
         """
         self.eval()
-
-        if adata is None:
-            adata = self.adata
-
-        covs = self._cov_tensor(adata)
-
-        # generate dataloaders
-        dataloader = FastTensorDataLoader(adata.X, 
-                                          covs,
-                                         batch_size=128, 
-                                         shuffle=False)
-
-        res = self._run_batches(dataloader, retrieve='rec')
-
+        res = self._run_batches(adata, retrieve='rec')
         return res
 
     
@@ -541,7 +527,7 @@ class vanillaVAE(nn.Module):
             adata.X[:,gindices[i]] = values[i]
 
         # get reconstructed values
-        rec = self.get_reconstructed_values(adata)
+        rec = self._run_batches(adata, retrieve='rec')
     
         return rec
         

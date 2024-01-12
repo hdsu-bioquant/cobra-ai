@@ -518,7 +518,7 @@ class scOntoVAE(nn.Module):
         return act
 
     @torch.no_grad()
-    def _run_batches(self, dataloader: FastTensorDataLoader, retrieve: Literal['latent', 'act', 'rec'], lin_layer: bool=True):
+    def _run_batches(self, adata: AnnData, retrieve: Literal['latent', 'act', 'rec'], lin_layer: bool=True):
         """
         Runs batches of a dataloader through encoder or complete VAE and collects results.
 
@@ -528,6 +528,19 @@ class scOntoVAE(nn.Module):
             whether to retrieve latent space embedding (True) or reconstructed values (False)
         """
         self.eval()
+
+        if adata is not None:
+            if '_ontovae' not in adata.uns.keys():
+                raise ValueError('Please run sconto_vae.module.utils.setup_anndata first.')
+        else:
+            adata = self.adata
+
+        covs = self._cov_tensor(adata)
+
+        dataloader = FastTensorDataLoader(adata.X, 
+                                          covs,
+                                         batch_size=128, 
+                                         shuffle=False)
 
         res = []
         for minibatch in dataloader:
@@ -550,7 +563,7 @@ class scOntoVAE(nn.Module):
     @torch.no_grad()
     def to_latent(self, adata: AnnData=None):
         """
-        Retrieves reconstructed values from output layer.
+        Wrapper around _run_batches to retrieve latent space embedding.
 
         Parameters
         ----------
@@ -558,26 +571,13 @@ class scOntoVAE(nn.Module):
             AnnData object that was processed with setup_anndata_vanillavae
         """
         self.eval()
-
-        if adata is None:
-            adata = self.adata
-
-        covs = self._cov_tensor(adata)
-
-        # generate dataloaders
-        dataloader = FastTensorDataLoader(adata.X, 
-                                          covs,
-                                         batch_size=128, 
-                                         shuffle=False)
-
-        res = self._run_batches(dataloader, retrieve='latent')
-
+        res = self._run_batches(adata, retrieve='latent')
         return res
     
     @torch.no_grad()
     def get_pathway_activities(self, adata: AnnData=None, lin_layer=True):
         """
-        Retrieves pathway activities from latent space and decoder.
+        Wrapper around _run_batches to retrieve pathway activities.
 
         Parameters
         ----------
@@ -587,29 +587,13 @@ class scOntoVAE(nn.Module):
             whether linear layer should be used for calculation
         """
         self.eval()
-
-        if adata is not None:
-            if '_ontovae' not in adata.uns.keys():
-                raise ValueError('Please run sconto_vae.module.utils.setup_anndata first.')
-        else:
-            adata = self.adata
-
-        covs = self._cov_tensor(adata)
-
-        # generate dataloaders
-        dataloader = FastTensorDataLoader(adata.X, 
-                                          covs,
-                                         batch_size=128, 
-                                         shuffle=False)
-
-        res = self._run_batches(dataloader, 'act', lin_layer)
-
+        res = self._run_batches(adata, 'act', lin_layer)
         return res
 
     @torch.no_grad()
     def get_reconstructed_values(self, adata: AnnData=None):
         """
-        Retrieves reconstructed values from output layer.
+        Wrapper around _run_batches to retrieve output layer.
 
         Parameters
         ----------
@@ -617,20 +601,7 @@ class scOntoVAE(nn.Module):
             AnnData object that was processed with setup_anndata_vanillavae
         """
         self.eval()
-
-        if adata is None:
-            adata = self.adata
-
-        covs = self._cov_tensor(adata)
-
-        # generate dataloaders
-        dataloader = FastTensorDataLoader(adata.X, 
-                                          covs,
-                                         batch_size=128, 
-                                         shuffle=False)
-
-        res = self._run_batches(dataloader, retrieve='rec')
-
+        res = self._run_batches(adata, retrieve='rec')
         return res
     
     @torch.no_grad()
@@ -668,9 +639,9 @@ class scOntoVAE(nn.Module):
 
         # run perturbed data through network
         if output == 'act':
-            res = self.get_pathway_activities(adata, lin_layer)
+            res = self._run_batches(adata, 'act', lin_layer)
         else:
-            res = self.get_reconstructed_values(adata)
+            res = self._run_batches(adata, retrieve='rec')
 
         return res
 
