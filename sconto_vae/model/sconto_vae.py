@@ -527,6 +527,8 @@ class scOntoVAE(nn.Module):
         latent
             whether to retrieve latent space embedding (True) or reconstructed values (False)
         """
+        self.eval()
+
         res = []
         for minibatch in dataloader:
             x = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
@@ -584,6 +586,8 @@ class scOntoVAE(nn.Module):
         lin_layer
             whether linear layer should be used for calculation
         """
+        self.eval()
+
         if adata is not None:
             if '_ontovae' not in adata.uns.keys():
                 raise ValueError('Please run sconto_vae.module.utils.setup_anndata first.')
@@ -647,6 +651,7 @@ class scOntoVAE(nn.Module):
         lin_layer
             whether linear layer should be used for pathway activity retrieval
         """
+        self.eval()
 
         if adata is not None:
             if '_ontovae' not in adata.uns.keys():
