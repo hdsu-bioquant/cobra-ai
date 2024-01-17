@@ -9,7 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm
 
-from typing import Iterable
+from typing import Iterable, Literal
 
 from anndata import AnnData
 
@@ -233,10 +233,10 @@ class scOntoVAE(nn.Module):
             shape of each tensor is (minibatch, 1)
         """
         mu, log_var = self.encoder(x, cat_list)
-        embedding = self.reparameterize(mu, log_var)
+        z = self.reparameterize(mu, log_var)
         if self.use_activation_lat:
-            embedding = self.activation_fn_dec()(embedding)
-        return embedding
+            z = self.activation_fn_dec()(z)
+        return z, mu, log_var
 
 
     def forward(self, x: torch.tensor, cat_list: Iterable[torch.tensor]):
@@ -252,12 +252,9 @@ class scOntoVAE(nn.Module):
             shape of each tensor is (minibatch, 1)
         """
 
-        mu, log_var = self.encoder(x, cat_list)
-        z = self.reparameterize(mu, log_var)
-        if self.use_activation_lat and self.use_activation_dec:
-            z = self.activation_fn_dec()(z)
+        z, mu, log_var = self._get_embedding(x, cat_list)
         reconstruction = self.decoder(z, cat_list)
-        return reconstruction, mu, log_var
+        return z, mu, log_var, reconstruction
 
     def vae_loss(self, reconstruction, mu, log_var, data, kl_coeff, mode='train', run=None):
         """
@@ -269,7 +266,7 @@ class scOntoVAE(nn.Module):
             run["metrics/" + mode + "/kl_loss"].log(kl_loss)
             run["metrics/" + mode + "/rec_loss"].log(rec_loss)
         return torch.mean(rec_loss + kl_coeff*kl_loss)
-
+    
     def train_round(self, 
                     dataloader: FastTensorDataLoader, 
                     kl_coeff: float, 
@@ -302,7 +299,7 @@ class scOntoVAE(nn.Module):
             optimizer.zero_grad()
 
             # forward step
-            reconstruction, mu, log_var = self.forward(data, cat_list)
+            _, mu, log_var, reconstruction = self.forward(data, cat_list)
             loss = self.vae_loss(reconstruction, mu, log_var, data, kl_coeff, mode='train', run=run)
             running_loss += loss.item()
 
@@ -353,7 +350,7 @@ class scOntoVAE(nn.Module):
             cat_list = torch.split(minibatch[1].T.to(self.device), 1)
 
             # forward step
-            reconstruction, mu, log_var = self.forward(data, cat_list)
+            _, mu, log_var, reconstruction = self.forward(data, cat_list)
             loss = self.vae_loss(reconstruction, mu, log_var,data, kl_coeff, mode='val', run=run)
             running_loss += loss.item()
 
@@ -436,8 +433,6 @@ class scOntoVAE(nn.Module):
         val_loss_min = float('inf')
         optimizer = optimizer(self.parameters(), lr = lr)
 
-
-
         for epoch in range(epochs):
             print(f"Epoch {epoch+1} of {epochs}")
             train_epoch_loss = self.train_round(trainloader, kl_coeff, optimizer, run)
@@ -458,8 +453,7 @@ class scOntoVAE(nn.Module):
                 val_loss_min = val_epoch_loss
                 
             print(f"Train Loss: {train_epoch_loss:.4f}")
-            print(f"Val Loss: {val_epoch_loss:.4f}")     
-
+            print(f"Val Loss: {val_epoch_loss:.4f}")
 
     def _get_activation(self, index, activation={}):
         def hook(model, input, output):
@@ -476,9 +470,9 @@ class scOntoVAE(nn.Module):
 
 
     @torch.no_grad()
-    def _pass_data(self, x, cat_list, output, lin_layer=True):
+    def _hook_activities(self, x, cat_list, lin_layer=True):
         """
-        Passes data through the model.
+        Attaches hooks and retrieves pathway activities.
 
         Parameters
         ----------
@@ -487,19 +481,12 @@ class scOntoVAE(nn.Module):
         cat_list
             Iterable of torch.tensors containing the category memberships
             shape of each tensor is (minibatch, 1)
-        output
-            'act': return pathway activities
-            'rec': return reconstructed values
         lin_layer:
             whether hooks should be attached to linear layer of the model
         """
 
         # set to eval mode
         self.eval()
-
-        # get latent space embedding
-        z = self._get_embedding(x, cat_list)
-        z = z.to('cpu').detach().numpy()
 
         # initialize activations and hooks
         activation = {}
@@ -509,22 +496,19 @@ class scOntoVAE(nn.Module):
         self._attach_hooks(lin_layer=lin_layer, activation=activation, hooks=hooks)
 
         # pass data through model
-        reconstruction, _, _ = self.forward(x, cat_list)
+        z, _, _, _ = self.forward(x, cat_list)
 
-        act = torch.cat(list(activation.values()), dim=1).to('cpu').detach().numpy()
+        act = torch.cat(list(activation.values()), dim=1)
         
         # remove hooks
         for h in hooks:
             hooks[h].remove()
 
         # return pathway activities or reconstructed gene values
-        if output == 'act':
-            if self.root_layer_latent:
-                return np.hstack((z,act))
-            else:
-                return act
-        if output == 'rec':
-            return reconstruction.to('cpu').detach().numpy()
+        if self.root_layer_latent:
+            return torch.hstack((z,act))
+        else:
+            return act
 
     def _average_neuronnum(self, act: np.array):
         """
@@ -534,100 +518,94 @@ class scOntoVAE(nn.Module):
         return act
 
     @torch.no_grad()
-    def get_pathway_activities(self, adata: AnnData=None, terms=None, lin_layer=True):
+    def _run_batches(self, adata: AnnData, retrieve: Literal['latent', 'act', 'rec'], lin_layer: bool=True):
         """
-        Retrieves pathway activities from latent space and decoder.
+        Runs batches of a dataloader through encoder or complete VAE and collects results.
+
+        Parameters
+        ----------
+        latent
+            whether to retrieve latent space embedding (True) or reconstructed values (False)
+        """
+        self.eval()
+
+        if adata is not None:
+            if '_ontovae' not in adata.uns.keys():
+                raise ValueError('Please run sconto_vae.module.utils.setup_anndata first.')
+        else:
+            adata = self.adata
+
+        covs = self._cov_tensor(adata)
+
+        dataloader = FastTensorDataLoader(adata.X, 
+                                          covs,
+                                         batch_size=128, 
+                                         shuffle=False)
+
+        res = []
+        for minibatch in dataloader:
+            x = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
+            cat_list = torch.split(minibatch[1].T.to(self.device), 1)
+            if retrieve == 'latent':
+                result, _, _ = self._get_embedding(x, cat_list)
+            elif retrieve == 'act':
+                result = self._hook_activities(x, cat_list, lin_layer)
+            else:
+                _, _, _, result = self.forward(x, cat_list)
+            result = result.to('cpu').detach().numpy()
+            if retrieve in ['latent', 'act']:
+                result = self._average_neuronnum(result)
+            res.append(result)
+        res = np.vstack(res)
+
+        return res
+    
+    @torch.no_grad()
+    def to_latent(self, adata: AnnData=None):
+        """
+        Wrapper around _run_batches to retrieve latent space embedding.
+
+        Parameters
+        ----------
+        adata
+            AnnData object that was processed with setup_anndata_vanillavae
+        """
+        self.eval()
+        res = self._run_batches(adata, retrieve='latent')
+        return res
+    
+    @torch.no_grad()
+    def get_pathway_activities(self, adata: AnnData=None, lin_layer=True):
+        """
+        Wrapper around _run_batches to retrieve pathway activities.
 
         Parameters
         ----------
         adata
             AnnData object that was processed with setup_anndata
-        terms
-            list of ontology term ids whose activities should be retrieved
         lin_layer
             whether linear layer should be used for calculation
         """
-        if adata is not None:
-            if '_ontovae' not in adata.uns.keys():
-                raise ValueError('Please run sconto_vae.module.utils.setup_anndata first.')
-        else:
-            adata = self.adata
-
-        covs = self._cov_tensor(adata)
-
-        # generate dataloaders
-        dataloader = FastTensorDataLoader(adata.X, 
-                                          covs,
-                                         batch_size=128, 
-                                         shuffle=False)
-
-        act = []
-        for minibatch in dataloader:
-            x = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
-            cat_list = torch.split(minibatch[1].T.to(self.device), 1)
-            a = self._pass_data(x, cat_list, 'act', lin_layer)
-            aavg = self._average_neuronnum(a)
-            act.append(aavg)
-        act = np.vstack(act)
-
-        # if term was specified, subset
-        if terms is not None:
-            annot = adata.uns['_ontovae']['annot']
-            term_ind = annot[annot.ID.isin(terms)].index.to_numpy()
-
-            act = act[:,term_ind]
-
-        return act
-
+        self.eval()
+        res = self._run_batches(adata, 'act', lin_layer)
+        return res
 
     @torch.no_grad()
-    def get_reconstructed_values(self, adata: AnnData=None, rec_genes=None):
+    def get_reconstructed_values(self, adata: AnnData=None):
         """
-        Retrieves reconstructed values from output layer.
+        Wrapper around _run_batches to retrieve output layer.
 
         Parameters
         ----------
         adata
-            AnnData object that was processed with setup_anndata
-        rec_genes
-            list of genes whose reconstructed values should be retrieved
+            AnnData object that was processed with setup_anndata_vanillavae
         """
-
-        if adata is not None:
-            if '_ontovae' not in adata.uns.keys():
-                raise ValueError('Please run sconto_vae.module.utils.setup_anndata first.')
-        else:
-            adata = self.adata
-
-        covs = self._cov_tensor(adata)
-
-        # generate dataloaders
-        dataloader = FastTensorDataLoader(adata.X, 
-                                          covs,
-                                         batch_size=128, 
-                                         shuffle=False)
-
-        rec = []
-        for minibatch in dataloader:
-            x = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
-            cat_list = torch.split(minibatch[1].T.to(self.device), 1)
-            r = self._pass_data(x, cat_list, 'rec')
-            ravg = self._average_neuronnum(r)
-            rec.append(ravg)
-        rec = np.vstack(rec)
-
-        # if genes were passed, subset
-        if rec_genes is not None:
-            onto_genes = adata.uns['_ontovae']['genes']
-            gene_ind = np.array([onto_genes.index(g) for g in rec_genes])
-
-            rec = rec[:,gene_ind]
-
-        return rec
-
+        self.eval()
+        res = self._run_batches(adata, retrieve='rec')
+        return res
     
     @torch.no_grad()
-    def perturbation(self, adata: AnnData=None, genes: list=[], values: list=[], output='terms', terms=None, rec_genes=None, lin_layer=True):
+    def perturbation(self, adata: AnnData=None, genes: list=[], values: list=[], output=Literal['act','rec'], lin_layer=True):
         """
         Retrieves pathway activities or reconstructed gene values after performing in silico perturbation.
 
@@ -640,16 +618,11 @@ class scOntoVAE(nn.Module):
         values
             list with new values, same length as genes
         output
-            - 'terms': retrieve pathway activities
-            - 'genes': retrieve reconstructed values
-
-        terms
-            list of ontology term ids whose values should be retrieved
-        rec_genes
-            list of genes whose values should be retrieved
+            whether to retrieve pathway activities ('act') or reconstructed gene values ('rec')
         lin_layer
             whether linear layer should be used for pathway activity retrieval
         """
+        self.eval()
 
         if adata is not None:
             if '_ontovae' not in adata.uns.keys():
@@ -664,43 +637,13 @@ class scOntoVAE(nn.Module):
         for i in range(len(genes)):
             adata.X[:,gindices[i]] = values[i]
 
-        covs = self._cov_tensor(adata)
-
-        # generate dataloader
-        dataloader = FastTensorDataLoader(adata.X, 
-                                          covs,
-                                         batch_size=128, 
-                                         shuffle=False)
-
-        # get pathway activities or reconstructed values after perturbation
-        res = []
-        for minibatch in dataloader:
-            x = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
-            cat_list = torch.split(minibatch[1].T.to(self.device), 1)
-            if output == 'terms':
-                r = self._pass_data(x, cat_list, 'act', lin_layer)
-                ravg = self._average_neuronnum(r)
-                res.append(ravg)
-            if output == 'genes':
-                r = self._pass_data(x, cat_list, 'rec')
-                ravg = self._average_neuronnum(r)
-                res.append(ravg)
-
-        # if term was specified, subset
-        if terms is not None:
-            annot = adata.uns['_ontovae']['annot']
-            term_ind = annot[annot.ID.isin(terms)].index.to_numpy()
-
-            res = res[:,term_ind]
-        
-        if rec_genes is not None:
-            onto_genes = adata.uns['_ontovae']['genes']
-            gene_ind = np.array([onto_genes.index(g) for g in rec_genes])
-
-            res = res[:,gene_ind]
+        # run perturbed data through network
+        if output == 'act':
+            res = self._run_batches(adata, 'act', lin_layer)
+        else:
+            res = self._run_batches(adata, retrieve='rec')
 
         return res
-        
 
 
     

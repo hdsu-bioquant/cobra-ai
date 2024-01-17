@@ -9,7 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm
 
-from typing import Iterable
+from typing import Iterable, Literal
 
 from anndata import AnnData
 
@@ -220,10 +220,10 @@ class vanillaVAE(nn.Module):
             shape of each tensor is (minibatch, 1)
         """
         mu, log_var = self.encoder(x, cat_list)
-        embedding = self.reparameterize(mu, log_var)
+        z = self.reparameterize(mu, log_var)
         if self.use_activation_lat:
-            embedding = self.activation_fn_dec()(embedding)
-        return embedding
+            z = self.activation_fn_dec()(z)
+        return z, mu, log_var
 
 
     def forward(self, x: torch.tensor, cat_list: Iterable[torch.tensor]):
@@ -239,12 +239,9 @@ class vanillaVAE(nn.Module):
             shape of each tensor is (minibatch, 1)
         """
 
-        mu, log_var = self.encoder(x, cat_list)
-        z = self.reparameterize(mu, log_var)
-        if self.use_activation_lat:
-            z = self.activation_fn_dec()(z)
+        z, mu, log_var = self._get_embedding(x, cat_list)
         reconstruction = self.decoder(z, cat_list)
-        return reconstruction, mu, log_var
+        return z, mu, log_var, reconstruction
 
     def vae_loss(self, reconstruction, mu, log_var, data, kl_coeff, mode='train', run=None):
         """
@@ -289,7 +286,7 @@ class vanillaVAE(nn.Module):
             optimizer.zero_grad()
 
             # forward step
-            reconstruction, mu, log_var = self.forward(data, cat_list)
+            _, mu, log_var, reconstruction = self.forward(data, cat_list)
             loss = self.vae_loss(reconstruction, mu, log_var, data, kl_coeff, mode='train', run=run)
             running_loss += loss.item()
 
@@ -332,7 +329,7 @@ class vanillaVAE(nn.Module):
             cat_list = torch.split(minibatch[1].T.to(self.device), 1)
 
             # forward step
-            reconstruction, mu, log_var = self.forward(data, cat_list)
+            _, mu, log_var, reconstruction = self.forward(data, cat_list)
             loss = self.vae_loss(reconstruction, mu, log_var,data, kl_coeff, mode='val', run=run)
             running_loss += loss.item()
 
@@ -415,8 +412,6 @@ class vanillaVAE(nn.Module):
         val_loss_min = float('inf')
         optimizer = optimizer(self.parameters(), lr = lr)
 
-
-
         for epoch in range(epochs):
             print(f"Epoch {epoch+1} of {epochs}")
             train_epoch_loss = self.train_round(trainloader, kl_coeff, optimizer, run)
@@ -438,7 +433,42 @@ class vanillaVAE(nn.Module):
                 
             print(f"Train Loss: {train_epoch_loss:.4f}")
             print(f"Val Loss: {val_epoch_loss:.4f}")     
+    
 
+    @torch.no_grad()
+    def _run_batches(self, adata: AnnData, retrieve: Literal['latent', 'rec']):
+        """
+        Runs batches of a dataloader through encoder or complete VAE and collects results.
+
+        Parameters
+        ----------
+        latent
+            whether to retrieve latent space embedding (True) or reconstructed values (False)
+        """
+        self.eval()
+
+        if adata is None:
+            adata = self.adata
+
+        covs = self._cov_tensor(adata)
+
+        dataloader = FastTensorDataLoader(adata.X, 
+                                          covs,
+                                         batch_size=128, 
+                                         shuffle=False)
+        
+        res = []
+        for minibatch in dataloader:
+            x = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
+            cat_list = torch.split(minibatch[1].T.to(self.device), 1)
+            if retrieve == 'latent':
+                result, _, _ = self._get_embedding(x, cat_list)
+            else:
+                _, _, _, result = self.forward(x, cat_list)
+            res.append(result.to('cpu').detach().numpy())
+        res = np.vstack(res)
+
+        return res
 
     @torch.no_grad()
     def to_latent(self, adata: AnnData=None):
@@ -451,27 +481,8 @@ class vanillaVAE(nn.Module):
             AnnData object that was processed with setup_anndata_vanillavae
         """
         self.eval()
-
-        if adata is None:
-            adata = self.adata
-
-        covs = self._cov_tensor(adata)
-
-        # generate dataloaders
-        dataloader = FastTensorDataLoader(adata.X, 
-                                          covs,
-                                         batch_size=128, 
-                                         shuffle=False)
-
-        embed = []
-        for minibatch in dataloader:
-            x = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
-            cat_list = torch.split(minibatch[1].T.to(self.device), 1)
-            embedding = self._get_embedding(x, cat_list)
-            embed.append(embedding.to('cpu').detach().numpy())
-        embed = np.vstack(embed)
-
-        return embed
+        res = self._run_batches(adata, retrieve='latent')
+        return res
 
 
     @torch.no_grad()
@@ -485,27 +496,8 @@ class vanillaVAE(nn.Module):
             AnnData object that was processed with setup_anndata_vanillavae
         """
         self.eval()
-
-        if adata is None:
-            adata = self.adata
-
-        covs = self._cov_tensor(adata)
-
-        # generate dataloaders
-        dataloader = FastTensorDataLoader(adata.X, 
-                                          covs,
-                                         batch_size=128, 
-                                         shuffle=False)
-
-        rec = []
-        for minibatch in dataloader:
-            x = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
-            cat_list = torch.split(minibatch[1].T.to(self.device), 1)
-            reconstruction, _, _ = self.forward(x, cat_list)
-            rec.append(reconstruction.to('cpu').detach().numpy())
-        rec = np.vstack(rec)
-
-        return rec
+        res = self._run_batches(adata, retrieve='rec')
+        return res
 
     
     @torch.no_grad()
@@ -534,22 +526,9 @@ class vanillaVAE(nn.Module):
         for i in range(len(genes)):
             adata.X[:,gindices[i]] = values[i]
 
-        covs = self._cov_tensor(adata)
-
-        # generate dataloader
-        dataloader = FastTensorDataLoader(adata.X, 
-                                          covs,
-                                         batch_size=128, 
-                                         shuffle=False)
-
-        rec = []
-        for minibatch in dataloader:
-            x = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
-            cat_list = torch.split(minibatch[1].T.to(self.device), 1)
-            reconstruction, _, _ = self.forward(x, cat_list)
-            rec.append(reconstruction.to('cpu').detach().numpy())
-        rec = np.vstack(rec)
-
+        # get reconstructed values
+        rec = self._run_batches(adata, retrieve='rec')
+    
         return rec
         
 

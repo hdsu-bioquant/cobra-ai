@@ -9,7 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm
 
-from typing import Iterable
+from typing import Iterable, Literal
 
 from anndata import AnnData
 
@@ -601,52 +601,8 @@ class vanillaCPA(vanillaVAE):
             if tune_params:
                 train.report({"purity": val_knn_purity})
 
-                
-
-
     @torch.no_grad()
-    def to_latent(self, adata: AnnData=None):
-        """
-        Retrieves different representations of z.
-
-        Parameters
-        ----------
-        adata
-            AnnData object that was processed with setup_anndata
-        """
-        self.eval()
-
-        if adata is None:
-            adata = self.adata
-
-        batch = self._cov_tensor(adata)
-        covs = torch.tensor(adata.obsm['_cpa_categorical_covs'].to_numpy())
-
-        # generate dataloaders
-        dataloader = FastTensorDataLoader(adata.X, 
-                                          batch,
-                                          covs,
-                                         batch_size=128, 
-                                         shuffle=False)
-
-        embed = []
-        for minibatch in dataloader:
-            x = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
-            cat_list = torch.split(minibatch[1].T.to(self.device), 1)
-            cov_list = torch.split(minibatch[2].T.to(self.device), 1)
-            embed_dict, _, _ = self._get_embedding(x, cat_list, cov_list)
-            embed.append({k: v.to('cpu').detach().numpy() for k, v in embed_dict.items()})
-        key_list = list(embed[0].keys())
-        embed_dict = {}
-        for key in key_list:
-            embed_key = np.vstack([e[key] for e in embed])
-            embed_dict[key] = embed_key
-
-        return embed_dict
-
-
-    @torch.no_grad()
-    def _pass_data(self, x, cat_list, cov_list, output, lin_layer=True):
+    def _pass_data(self, x, cat_list, cov_list):
         """
         Passes data through the model.
 
@@ -682,6 +638,66 @@ class vanillaCPA(vanillaVAE):
             rec_dict[z_key] = reconstruction
 
         return rec_dict
+                
+
+    @torch.no_grad()
+    def _run_batches(self, adata: AnnData, retrieve: Literal['latent', 'rec']):
+        """
+        Runs batches of a dataloader through encoder or complete VAE and collects results.
+
+        Parameters
+        ----------
+        latent
+            whether to retrieve latent space embedding (True) or reconstructed values (False)
+        """
+        self.eval()
+
+        if adata is None:
+            adata = self.adata
+
+        batch = self._cov_tensor(adata)
+        covs = self._cov_tensor(adata)
+
+        dataloader = FastTensorDataLoader(adata.X, 
+                                          batch,
+                                          covs,
+                                         batch_size=128, 
+                                         shuffle=False)
+
+        res = []
+        for minibatch in dataloader:
+            x = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
+            cat_list = torch.split(minibatch[1].T.to(self.device), 1)
+            cov_list = torch.split(minibatch[2].T.to(self.device), 1)
+            if retrieve == 'latent':
+                result, _, _ = self._get_embedding(x, cat_list, cov_list)
+            else:
+                result = self._pass_data(x, cat_list, cov_list)
+            result_avg = {k: v.to('cpu').detach().numpy() for k, v in result.items()}
+            res.append(result_avg)
+
+        res_out = {}
+        key_list = list(res[0].keys())
+        for key in key_list:
+            res_key = np.vstack([r[key] for r in res])
+            res_out[key] = res_key
+
+        return res_out
+    
+    @torch.no_grad()
+    def to_latent(self, adata: AnnData=None):
+        """
+        Retrieves different representations of z.
+
+        Parameters
+        ----------
+        adata
+            AnnData object that was processed with setup_anndata
+        """
+        self.eval()
+        res = self._run_batches(adata, 'latent')
+        return res
+
 
     @torch.no_grad()
     def get_reconstructed_values(self, adata: AnnData=None):
@@ -694,36 +710,12 @@ class vanillaCPA(vanillaVAE):
             AnnData object that was processed with setup_anndata
         """
         self.eval()
-
-        if adata is None:
-            adata = self.adata
-
-        covs = self._cov_tensor(adata)
-
-        # generate dataloaders
-        dataloader = FastTensorDataLoader(adata.X, 
-                                          covs,
-                                         batch_size=128, 
-                                         shuffle=False)
-
-        rec = []
-        for minibatch in dataloader:
-            x = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
-            cat_list = torch.split(minibatch[1].T.to(self.device), 1)
-            cov_list = torch.split(minibatch[2].T.to(self.device), 1)
-            rec_dict = self._pass_data(x, cat_list, cov_list)
-            rec.append({k: v.to('cpu').detach().numpy() for k, v in rec_dict.items()})
-        key_list = list(rec[0].keys())
-        rec_dict = {}
-        for key in key_list:
-            act_key = np.vstack([a[key] for a in rec])
-            rec_dict[key] = act_key
-
-        return rec_dict
+        res = self._run_batches(adata, 'rec')
+        return res
 
     
     @torch.no_grad()
-    def perturbation(self, adata: AnnData=None, genes: list=[], values: list=[], output='terms', terms=None, rec_genes=None, lin_layer=True):
+    def perturbation(self, adata: AnnData=None, genes: list=[], values: list=[]):
         """
         Retrieves pathway activities or reconstructed gene values after performing in silico perturbation.
 
@@ -735,16 +727,6 @@ class vanillaCPA(vanillaVAE):
             a list of genes to perturb
         values
             list with new values, same length as genes
-        output
-            - 'terms': retrieve pathway activities
-            - 'genes': retrieve reconstructed values
-
-        terms
-            list of ontology term ids whose values should be retrieved
-        rec_genes
-            list of genes whose values should be retrieved
-        lin_layer
-            whether linear layer should be used for pathway activity retrieval
         """
         self.eval()
         
@@ -761,27 +743,9 @@ class vanillaCPA(vanillaVAE):
         for i in range(len(genes)):
             adata.X[:,gindices[i]] = values[i]
 
-        covs = self._cov_tensor(adata)
+        # run perturbed data through network
+        res = self._run_batches(adata, 'rec')
 
-        # generate dataloaders
-        dataloader = FastTensorDataLoader(adata.X, 
-                                          covs,
-                                         batch_size=128, 
-                                         shuffle=False)
-
-        rec = []
-        for minibatch in dataloader:
-            x = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
-            cat_list = torch.split(minibatch[1].T.to(self.device), 1)
-            cov_list = torch.split(minibatch[2].T.to(self.device), 1)
-            rec_dict = self._pass_data(x, cat_list, cov_list)
-            rec.append({k: v.to('cpu').detach().numpy() for k, v in rec_dict.items()})
-        key_list = list(act[0].keys())
-        rec_dict = {}
-        for key in key_list:
-            act_key = np.vstack([a[key] for a in rec])
-            rec_dict[key] = act_key
-
-        return rec_dict
+        return res
     
         

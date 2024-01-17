@@ -9,7 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from tqdm import tqdm
 
-from typing import Iterable
+from typing import Iterable, Literal
 
 from anndata import AnnData
 
@@ -612,7 +612,7 @@ class OntoVAEcpa(scOntoVAE):
                 
 
     @torch.no_grad()
-    def _pass_data(self, x, cat_list, cov_list, output, lin_layer=True):
+    def _pass_data(self, x, cat_list, cov_list, retrieve: Literal['act', 'rec'], lin_layer=True):
         """
         Passes data through the model.
 
@@ -626,7 +626,7 @@ class OntoVAEcpa(scOntoVAE):
         cov_list
             Iterable of torch.tensors containing the covs to delineate in 
             latent space 
-        output
+        retrieve
             'act': return pathway activities
             'rec': return reconstructed values
         lin_layer:
@@ -646,32 +646,83 @@ class OntoVAEcpa(scOntoVAE):
         for z_key in dict_keys:
             z = zdict[z_key].clone()
 
-            # initialize activations and hooks
-            activation = {}
-            hooks = {}
-
             # attach the hooks
-            self._attach_hooks(lin_layer=lin_layer, activation=activation, hooks=hooks)
+            if retrieve == 'act':
+                activation = {}
+                hooks = {}
+                self._attach_hooks(lin_layer=lin_layer, activation=activation, hooks=hooks)
 
             # pass data through model
             reconstruction = self.decoder(z, cat_list)
 
-            act = torch.cat(list(activation.values()), dim=1)
-        
-            # remove hooks
-            for h in hooks:
-                hooks[h].remove()
-
             # return pathway activities or reconstructed gene values
-            if output == 'act':
+            if retrieve == 'act':
+                act = torch.cat(list(activation.values()), dim=1)
+                for h in hooks:
+                    hooks[h].remove()
                 if self.root_layer_latent:
                     act_dict[z_key] = torch.hstack((z,act))
                 else:
                     act_dict[z_key] = act
-            if output == 'rec':
+            else:
                 act_dict[z_key] = reconstruction
         return act_dict
+    
+    @torch.no_grad()
+    def _run_batches(self, adata: AnnData, retrieve: Literal['latent', 'act', 'rec'], lin_layer: bool=True):
+        """
+        Runs batches of a dataloader through encoder or complete VAE and collects results.
 
+        Parameters
+        ----------
+        latent
+            whether to retrieve latent space embedding (True) or reconstructed values (False)
+        """
+        self.eval()
+
+        if adata is not None:
+            if '_ontovae' not in adata.uns.keys():
+                raise ValueError('Please run sconto_vae.module.utils.setup_anndata first.')
+        else:
+            adata = self.adata
+
+        batch = self._cov_tensor(adata)
+        covs = torch.tensor(adata.obsm['_cpa_categorical_covs'].to_numpy())
+
+        dataloader = FastTensorDataLoader(adata.X, 
+                                          batch,
+                                          covs,
+                                         batch_size=128, 
+                                         shuffle=False)
+
+        res = []
+        for minibatch in dataloader:
+            x = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
+            cat_list = torch.split(minibatch[1].T.to(self.device), 1)
+            cov_list = torch.split(minibatch[2].T.to(self.device), 1)
+            if retrieve == 'latent':
+                result, _, _ = self._get_embedding(x, cat_list, cov_list)
+                if self.root_layer_latent:
+                    result_avg = {k: self._average_neuronnum(v.to('cpu').detach().numpy()) for k, v in result.items()}
+                else:
+                    result_avg = {k: v.to('cpu').detach().numpy() for k, v in result.items()}
+                res.append(result_avg)
+            else:
+                result = self._pass_data(x, cat_list, cov_list, retrieve, lin_layer)
+                if retrieve == 'act':
+                    result_avg = {k: self._average_neuronnum(v.to('cpu').detach().numpy()) for k, v in result.items()}
+                else:
+                    result_avg = {k: v.to('cpu').detach().numpy() for k, v in result.items()}
+                res.append(result_avg)
+
+        res_out = {}
+        key_list = list(res[0].keys())
+        for key in key_list:
+            res_key = np.vstack([r[key] for r in res])
+            res_out[key] = res_key
+
+        return res_out
+    
     @torch.no_grad()
     def to_latent(self, adata: AnnData=None):
         """
@@ -683,44 +734,11 @@ class OntoVAEcpa(scOntoVAE):
             AnnData object that was processed with setup_anndata
         """
         self.eval()
-
-        if adata is not None:
-            if '_ontovae' not in adata.uns.keys():
-                raise ValueError('Please run sconto_vae.module.utils.setup_anndata first.')
-        else:
-            adata = self.adata
-
-        batch = self._cov_tensor(adata)
-        covs = torch.tensor(adata.obsm['_cpa_categorical_covs'].to_numpy())
-
-        # generate dataloaders
-        dataloader = FastTensorDataLoader(adata.X, 
-                                          batch,
-                                          covs,
-                                         batch_size=128, 
-                                         shuffle=False)
-
-        embed = []
-        for minibatch in dataloader:
-            x = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
-            cat_list = torch.split(minibatch[1].T.to(self.device), 1)
-            cov_list = torch.split(minibatch[2].T.to(self.device), 1)
-            embed_dict, _, _ = self._get_embedding(x, cat_list, cov_list)
-            if self.root_layer_latent:
-                embed_dict_avg = {k: self._average_neuronnum(v.to('cpu').detach().numpy()) for k, v in embed_dict.items()}
-            else:
-                embed_dict_avg = {k: v.to('cpu').detach().numpy() for k, v in embed_dict.items()}
-            embed.append(embed_dict_avg)
-        key_list = list(embed[0].keys())
-        embed_dict = {}
-        for key in key_list:
-            embed_key = np.vstack([e[key] for e in embed])
-            embed_dict[key] = embed_key
-
-        return embed_dict
+        res = self._run_batches(adata, retrieve='latent')
+        return res
     
     @torch.no_grad()
-    def get_pathway_activities(self, adata: AnnData=None, terms=None, lin_layer=True):
+    def get_pathway_activities(self, adata: AnnData=None, lin_layer=True):
         """
         Retrieves pathway activities from latent space and decoder.
 
@@ -728,55 +746,16 @@ class OntoVAEcpa(scOntoVAE):
         ----------
         adata
             AnnData object that was processed with setup_anndata
-        terms
-            list of ontology term ids whose activities should be retrieved
         lin_layer
             whether linear layer should be used for calculation
         """
         self.eval()
-
-        if adata is not None:
-            if '_ontovae' not in adata.uns.keys():
-                raise ValueError('Please run sconto_vae.module.utils.setup_anndata first.')
-        else:
-            adata = self.adata
-
-        batch = self._cov_tensor(adata)
-        covs = torch.tensor(adata.obsm['_cpa_categorical_covs'].to_numpy())
-
-        # generate dataloaders
-        dataloader = FastTensorDataLoader(adata.X, 
-                                          batch,
-                                          covs,
-                                         batch_size=128, 
-                                         shuffle=False)
-
-        act = []
-        for minibatch in dataloader:
-            x = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
-            cat_list = torch.split(minibatch[1].T.to(self.device), 1)
-            cov_list = torch.split(minibatch[2].T.to(self.device), 1)
-            act_dict = self._pass_data(x, cat_list, cov_list, 'act', lin_layer)
-            act_dict_avg = {k: self._average_neuronnum(v.to('cpu').detach().numpy()) for k, v in act_dict.items()}
-            act.append(act_dict_avg)
-        key_list = list(act[0].keys())
-        act_dict = {}
-        for key in key_list:
-            act_key = np.vstack([a[key] for a in act])
-            act_dict[key] = act_key
-
-        # if term was specified, subset
-        if terms is not None:
-            annot = adata.uns['_ontovae']['annot']
-            term_ind = annot[annot.ID.isin(terms)].index.to_numpy()
-            for key in key_list:
-                act_dict[key] = act_dict[key][:,term_ind]
-
-        return act_dict
+        res = self._run_batches(adata, retrieve='act', lin_layer=lin_layer)
+        return res
 
 
     @torch.no_grad()
-    def get_reconstructed_values(self, adata: AnnData=None, rec_genes=None):
+    def get_reconstructed_values(self, adata: AnnData=None):
         """
         Retrieves reconstructed values from output layer.
 
@@ -784,126 +763,7 @@ class OntoVAEcpa(scOntoVAE):
         ----------
         adata
             AnnData object that was processed with setup_anndata
-        rec_genes
-            list of genes whose reconstructed values should be retrieved
         """
         self.eval()
-
-        if adata is not None:
-            if '_ontovae' not in adata.uns.keys():
-                raise ValueError('Please run sconto_vae.module.utils.setup_anndata first.')
-        else:
-            adata = self.adata
-
-        covs = self._cov_tensor(adata)
-
-        # generate dataloaders
-        dataloader = FastTensorDataLoader(adata.X, 
-                                          covs,
-                                         batch_size=128, 
-                                         shuffle=False)
-
-        act = []
-        for minibatch in dataloader:
-            x = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
-            cat_list = torch.split(minibatch[1].T.to(self.device), 1)
-            cov_list = torch.split(minibatch[2].T.to(self.device), 1)
-            act_dict = self._pass_data(x, cat_list, cov_list, 'rec', lin_layer=True)
-            act_dict_avg = {k: self._average_neuronnum(v.to('cpu').detach().numpy()) for k, v in act_dict.items()}
-            act.append(act_dict_avg)
-        key_list = list(act[0].keys())
-        act_dict = {}
-        for key in key_list:
-            act_key = np.vstack([a[key] for a in act])
-            act_dict[key] = act_key
-
-        # if term was specified, subset
-        if rec_genes is not None:
-            onto_genes = adata.uns['_ontovae']['genes']
-            gene_ind = np.array([onto_genes.index(g) for g in rec_genes])
-            for key in key_list:
-                act_dict[key] = act_dict[key][:,gene_ind]
-
-        return act_dict
-
-    
-    @torch.no_grad()
-    def perturbation(self, adata: AnnData=None, genes: list=[], values: list=[], output='terms', terms=None, rec_genes=None, lin_layer=True):
-        """
-        Retrieves pathway activities or reconstructed gene values after performing in silico perturbation.
-
-        Parameters
-        ----------
-        adata
-            AnnData object that was processed with setup_anndata
-        genes
-            a list of genes to perturb
-        values
-            list with new values, same length as genes
-        output
-            - 'terms': retrieve pathway activities
-            - 'genes': retrieve reconstructed values
-
-        terms
-            list of ontology term ids whose values should be retrieved
-        rec_genes
-            list of genes whose values should be retrieved
-        lin_layer
-            whether linear layer should be used for pathway activity retrieval
-        """
-        self.eval()
-        
-        if adata is not None:
-            if '_ontovae' not in adata.uns.keys():
-                raise ValueError('Please run sconto_vae.module.utils.setup_anndata first.')
-        else:
-            adata = self.adata
-
-        # get indices of the genes in list
-        gindices = [self.adata.uns['_ontovae']['genes'].index(g) for g in genes]
-
-        # replace their values
-        for i in range(len(genes)):
-            adata.X[:,gindices[i]] = values[i]
-
-        covs = self._cov_tensor(adata)
-
-        # generate dataloader
-        dataloader = FastTensorDataLoader(adata.X, 
-                                          covs,
-                                         batch_size=128, 
-                                         shuffle=False)
-
-        # get pathway activities or reconstructed values after perturbation
-        out = 'act' if output == 'terms' else 'rec'
-
-        act = []
-        for minibatch in dataloader:
-            x = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
-            cat_list = torch.split(minibatch[1].T.to(self.device), 1)
-            cov_list = torch.split(minibatch[2].T.to(self.device), 1)
-            act_dict = self._pass_data(x, cat_list, cov_list, out, lin_layer)
-            act_dict_avg = {k: self._average_neuronnum(v.to('cpu').detach().numpy()) for k, v in act_dict.items()}
-            act.append(act_dict_avg)
-        key_list = list(act[0].keys())
-        act_dict = {}
-        for key in key_list:
-            act_key = np.vstack([a[key] for a in act])
-            act_dict[key] = act_key
-
-        if terms is not None:
-            annot = adata.uns['_ontovae']['annot']
-            term_ind = annot[annot.ID.isin(terms)].index.to_numpy()
-            for key in key_list:
-                act_dict[key] = act_dict[key][:,term_ind]
-
-        # if term was specified, subset
-        if rec_genes is not None:
-            onto_genes = adata.uns['_ontovae']['genes']
-            gene_ind = np.array([onto_genes.index(g) for g in rec_genes])
-            for key in key_list:
-                act_dict[key] = act_dict[key][:,gene_ind]
-
-        return act_dict
-    
-        
+        res = self._run_batches(adata, retrieve='rec')
+        return res

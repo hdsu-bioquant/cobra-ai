@@ -23,6 +23,9 @@ def knn_purity(data, labels: np.ndarray, n_neighbors=30):
         score: float
             KNN purity score. A float between 0 and 1.
     """
+    n_samp = data.shape[0]
+    if n_neighbors > n_samp:
+        n_neighbors = n_samp - 10
     labels = LabelEncoder().fit_transform(labels.ravel())
 
     nbrs = NearestNeighbors(n_neighbors=n_neighbors + 1).fit(data)
