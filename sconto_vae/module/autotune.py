@@ -54,14 +54,36 @@ import os
 import sconto_vae.module.utils as utils
 
 class ModelTuner:
+    """
+    This class does automated hyperparameter tuning for scOntoVAE classes.
+
+    Parameters
+    ----------
+    model_cls
+        A model class (at the moment only sconto_vae_tunable) on which to tune hyperparameters.
+        Must have a class property '_tunables' that defines tunable elements, a class property '_metrics' that
+        defines the metrics that can be used, and the metric needs to be reported in the training function.
+
+    Examples
+    --------
+    >>> import scanpy as sc
+    >>> from sconto_vae.module import utils
+    >>> ontobj = Ontobj()
+    >>> ontobj.load(path_to_onto_object)
+    >>> adata = sc.read_h5ad(path_to_h5ad)
+    >>> adata = utils.setup_anndata_ontovae(adata, ontobj)
+    >>> tuner = at.ModelTuner(svt.scOntoVAE)
+    >>> tuner.info()
+    >>> search_space = {"drop_enc": tune.choice([0.2, 0.4]), "lr": tune.loguniform(1e-4, 1e-2)}
+    >>> results = tuner.fit(adata, ontobj, search_space, resources = {'GPU': 1.0, 'CPU': 4.0})
+    """
 
     def __init__(self, model_cls):
 
         self._model_cls = model_cls
 
     def get_tunables(self):
-        ''' Returns dictionary of tunables, stating the tunable type, default value, annotation and the source.
-            source: scvi.autotune.TunerManager._get_registry._get_tunables'''
+        ''' Returns dictionary of tunables, stating the tunable type, default value, annotation and the source.'''
         
         # The following for loop will provide all tunable parameters of the model class. 
         tunables = {}
@@ -99,9 +121,7 @@ class ModelTuner:
         return tunables
 
     def get_metric(self):
-
-        ''' Returns dictionary of metrics, stating the name of the metrics and the mode.
-            source: scvi.autotune.TunerManager._get_registry._get_metrics'''
+        ''' Returns dictionary of metrics, stating the name of the metrics and the mode.'''
         
         metrics = {}
 
@@ -118,9 +138,8 @@ class ModelTuner:
         return metrics
 
     def info(self) -> None:
+        ''' Provides all information about the tunable parameters and the metrics.'''
 
-        ''' Provides all information about the tunable parameters and the metrics. 
-            source: scvi.autotune.ModelTuner.info but mainly uses scvi.autotune.TunerManager._view_registry'''
         print(f"ModelTuner registry for {self._model_cls.__name__}")
 
         tunables = self.get_tunables()
@@ -141,6 +160,7 @@ class ModelTuner:
                       epochs,
                       resources,
                       ):
+        """Returns a trainable function consumable by :class:`~ray.tune.Tuner`."""
 
         def trainable(
                 search_space: dict,
@@ -150,8 +170,7 @@ class ModelTuner:
                 ontobj,
                 max_epochs: int,
                     ):
-            ''' This is a function, that can be wrapped by tune.with_parameters, which in turn is consumable by tune.Tuner
-                source: scvi.autotune.TunerManager._get_trainable._trainable'''
+            ''' This is a function, that can be wrapped by tune.with_parameters.'''
             
             # Parse the compact search space into separate kwards dictionaries
             # source: scvi.autotune.TunerManager._get_search_space
@@ -193,7 +212,54 @@ class ModelTuner:
             num_samples = 10,
             searcher = "hyperopt",
             resources = {}):
-        ''' Run a specified hyperparameter sweep for the asspciated model class'''
+        ''' Run a specified hyperparameter sweep for the associated model class.
+        
+        Parameters
+        ----------
+        adata:
+            anndata object that has been preprocessed with setup_anndata function.
+        ontobj:
+            ontobj object that has been preprocessed with setup_anndata function.
+        search_space:
+            Dictionary of hyperparameter names and their respective search spaces
+            provided as instantiated Ray Tune sample functions. Available
+            hyperparameters can be viewed with :meth:`~scvi.autotune.ModelTuner.info`.
+        epochs:
+            Number of epochs to train each model configuration.
+        metric:
+            One of the metrics that is available for the underlying model class (check ModelTuner.info()).
+            This metric is used to evaluate the quality of the values for hyperparameters that are tuned.
+        scheduler:
+            Ray Tune scheduler to use. One of the following:
+
+            * ``"asha"``: :class:`~ray.tune.schedulers.AsyncHyperBandScheduler` (default)
+            * ``"hyperband"``: :class:`~ray.tune.schedulers.HyperBandScheduler`
+            * ``"median"``: :class:`~ray.tune.schedulers.MedianStoppingRule`
+            * ``"pbt"``: :class:`~ray.tune.schedulers.PopulationBasedTraining`
+            * ``"fifo"``: :class:`~ray.tune.schedulers.FIFOScheduler`
+
+            Note that that not all schedulers are compatible with all search algorithms.
+            See Ray Tune `documentation <https://docs.ray.io/en/latest/tune/key-concepts.html#schedulers>`_
+            for more details.
+        num_samples:
+            Number of hyperparameter configurations to sample
+        searcher:
+            Ray Tune search algorithm to use. One of the following:
+
+            * ``"hyperopt"``: :class:`~ray.tune.hyperopt.HyperOptSearch` (default)
+            * ``"random"``: :class:`~ray.tune.search.basic_variant.BasicVariantGenerator`
+        resources:
+            Dictionary of maximum resources to allocate for the experiment. Available
+            keys include:
+
+            * ``"cpu"``: number of CPU threads
+            * ``"gpu"``: number of GPUs
+            * ``"memory"``: amount of memory
+
+        Returns
+        -------
+            A tuple containing the results of the hyperparameter tuning and the configurations.
+        '''
 
         if scheduler == "asha":
             _default_kwargs = {
