@@ -68,11 +68,12 @@ class ModelTuner:
     --------
     >>> import scanpy as sc
     >>> from sconto_vae.module import utils
+    >>> from sconto_vae.model import sconto_vae as onto
     >>> ontobj = Ontobj()
     >>> ontobj.load(path_to_onto_object)
     >>> adata = sc.read_h5ad(path_to_h5ad)
     >>> adata = utils.setup_anndata_ontovae(adata, ontobj)
-    >>> tuner = at.ModelTuner(svt.scOntoVAE)
+    >>> tuner = ModelTuner(onto.scOntoVAE)
     >>> tuner.info()
     >>> search_space = {"drop_enc": tune.choice([0.2, 0.4]), "lr": tune.loguniform(1e-4, 1e-2)}
     >>> results = tuner.fit(adata, ontobj, search_space, resources = {'GPU': 1.0, 'CPU': 4.0})
@@ -190,7 +191,7 @@ class ModelTuner:
             model = model_cls(adata, **model_kwargs)
             
             # still need rest of train parameters, use default values except for the trainable parameters, which are given by search_space
-            model.train_model(save = False, epochs = max_epochs, **train_kwargs)
+            model.train_model(modelpath = "", save = False, epochs = max_epochs, **train_kwargs)
 
         wrap_params = tune.with_parameters(
             trainable,
@@ -207,7 +208,7 @@ class ModelTuner:
             ontobj,
             search_space,
             epochs = 10,
-            metric = "ontovae_loss",
+            metric = "validation_loss",
             scheduler = "asha",
             num_samples = 10,
             searcher = "hyperopt",

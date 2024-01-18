@@ -16,6 +16,10 @@ from anndata import AnnData
 from sconto_vae.module.modules import Encoder, OntoDecoder
 from sconto_vae.module.utils import split_adata, FastTensorDataLoader
 
+# imports for autotuning
+from scvi._decorators import classproperty
+from sconto_vae.module.autotune import Tunable
+from ray import train
 
 """VAE with ontology in decoder"""
 
@@ -93,7 +97,7 @@ class scOntoVAE(nn.Module):
                  bias_enc: bool = True,
                  hidden_layers_enc: int=1, 
                  inject_covariates_enc: bool = False,
-                 drop_enc: float = 0.2, 
+                 drop_enc: Tunable[float] = 0.2, 
                  z_drop: float = 0.5,
                  root_layer_latent: bool = True,
                  latent_dim: int = 128,
@@ -360,9 +364,10 @@ class scOntoVAE(nn.Module):
 
     def train_model(self, 
                     modelpath: str, 
+                    save: bool = True,
                     train_size: float = 0.9,
                     seed: int = 42,
-                    lr: float=1e-4, 
+                    lr: Tunable[float]=1e-4, 
                     kl_coeff: float=1e-4, 
                     batch_size: int=128, 
                     optimizer: optim.Optimizer = optim.AdamW,
@@ -373,6 +378,8 @@ class scOntoVAE(nn.Module):
         ----------
         modelpath
             path to a folder where to store the params and the best model 
+        save
+            if the params and the best model should be saved, if save is False the modelpath parameter could only be an empty string
         train_size
             which percentage of samples to use for training
         seed
@@ -390,27 +397,29 @@ class scOntoVAE(nn.Module):
         run
             passed here if logging to Neptune should be carried out
         """
-        # save train params
-        train_params = {'train_size': train_size,
-                        'seed': seed,
-                        'lr': lr,
-                        'kl_coeff': kl_coeff,
-                        'batch_size': batch_size,
-                        'optimizer': str(optimizer).split("'")[1],
-                        'epochs': epochs
-                        }
-        with open(modelpath + '/train_params.json', 'w') as fp:
-            json.dump(train_params, fp, indent=4)
-        
-        if run is not None:
-            run["train_parameters"] = train_params
 
-        # save model params
-        with open(modelpath + '/model_params.json', 'w') as fp:
-            json.dump(self.params, fp, indent=4)
-        
-        if run is not None:
-            run["model_parameters"] = self.params
+        if save:
+            # save train params
+            train_params = {'train_size': train_size,
+                            'seed': seed,
+                            'lr': lr,
+                            'kl_coeff': kl_coeff,
+                            'batch_size': batch_size,
+                            'optimizer': str(optimizer).split("'")[1],
+                            'epochs': epochs
+                            }
+            with open(modelpath + '/train_params.json', 'w') as fp:
+                json.dump(train_params, fp, indent=4)
+            
+            if run is not None:
+                run["train_parameters"] = train_params
+
+            # save model params
+            with open(modelpath + '/model_params.json', 'w') as fp:
+                json.dump(self.params, fp, indent=4)
+            
+            if run is not None:
+                run["model_parameters"] = self.params
 
         # train-val split
         train_adata, val_adata = split_adata(self.adata, 
@@ -437,12 +446,13 @@ class scOntoVAE(nn.Module):
             print(f"Epoch {epoch+1} of {epochs}")
             train_epoch_loss = self.train_round(trainloader, kl_coeff, optimizer, run)
             val_epoch_loss = self.val_round(valloader, kl_coeff, run)
-            
+            train.report({"validation_loss": val_epoch_loss})
+
             if run is not None:
                 run["metrics/train/loss"].log(train_epoch_loss)
                 run["metrics/val/loss"].log(val_epoch_loss)
                 
-            if val_epoch_loss < val_loss_min:
+            if val_epoch_loss < val_loss_min and save:
                 print('New best model!')
                 torch.save({
                     'epoch': epoch,
@@ -646,5 +656,12 @@ class scOntoVAE(nn.Module):
         return res
 
 
+    @classproperty
+    def _tunables(cls):
+        return [cls.__init__, cls.train_model]
     
+    @classproperty
+    def _metrics(cls):
+        ''' Maybe should provide the metric in the manner ["name", "mode"]'''
+        return ["validation_loss"]
 
