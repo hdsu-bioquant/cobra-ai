@@ -16,40 +16,47 @@ from sconto_vae.module.ontobj import *
 from sconto_vae.module.utils import *
 from sconto_vae.model.sconto_vae import *
 
-# Creation of Ontology object
 
-def create_ontobj(path, file_ontology, file_gene_term, output, top_thres=1000, bottom_thresh=30):
-    """Create an Ontobj
+# Creation of Ontology object
+def create_ontobj(path, file_ontology, file_gene_term, name, top_thres=1000, bottom_thresh=30):
+    """Create a an Ontobj
     Input: 
     1. path: path to the folder that stores *.obo file
     2. file_ontology: file name of the ontology file. (.obo)
     3. file_gene_term: file name of the gene-term mapping (.txt)
-    4. output: Output file name: full path ending with .ontobj
-    5. top_thres: Top thresold for the ontology. (numerial: default: 1000)
-    6. bottom_thresh: Bottom thresold for the ontology. (numerial: default: 30)"""    
-    
+    4. name: Output file name
+    5. Top thresold for the ontology. (numerial: default: 1000)
+    6. Bottom thresold for the ontology. (numerial: default: 30)
+    """    
+    os.makedirs(path, exist_ok=True)
+    output_file = os.path.join(path, name + '.ontobj')
 
     # initialize the Ontobj
     ontobj = Ontobj(description='GO_ontobj')
     # initialize the ontology
+    
+    print("Initialization start... ", end="\n")
+    print("May take a while...", end="\n")
     ontobj.initialize_dag(obo= path + file_ontology,
                     gene_annot= path + file_gene_term)
+    print("Initialization done! ", end="\n")
 
 
     # trim the ontology
     ontobj.trim_dag(top_thresh=top_thres, 
                 bottom_thresh=bottom_thresh)
+    print("Traiming done! ", end="\n")
     # create masks for decoder initialization
     ontobj.create_masks(top_thresh=top_thres,
                     bottom_thresh=bottom_thresh)
+    print("Mask created! ", end="\n")
     # compute Wang Semantic similarities (used for app)
     ontobj.compute_wsem_sim(obo= path + file_ontology,
                         top_thresh=top_thres,
                         bottom_thresh=bottom_thresh)
     # save ontobj
-    ontobj.save(output)
-
-
+    ontobj.save(output_file)
+    print("Ontobj saved! ", end="\n")
 
 
 # initialize Ontobj and load existing object
@@ -57,7 +64,8 @@ def load_ontobj(file):
     """Load the ontoobj
     
     Input: full path for the .ontobj file
-    Output: an loaded ontobj"""
+    Output: an loaded ontobj
+    """
     ontobj = Ontobj()
     ontobj.load(file)
     return ontobj
@@ -70,8 +78,9 @@ def preprocess(file_sc):
     file_sc: single cell rna seq object (full path), ending in h5ad.
     
     Output: a preprocessed adata
-    Notice: For the next step, consider to split the adata after this preprocessing. 
-    Use sconto_vae.module.utils.split_adata"""
+    Notice for the next step: Consider to split the adata after the preprocess. 
+    Use sconto_vae.module.utils.split_adata
+    """
     adata = sc.read_h5ad(file_sc)
     adata.raw = adata # Fix the Seurat-preprocessed data to raw data
 
@@ -86,15 +95,15 @@ def preprocess(file_sc):
 
 
 def integration(adata, ontobj):
-    """
-    Integrate adata and ontobj
+    """Integrate adata and ontobj
     
     Input: 
     1. adata
     2. Ontobj
     
     Output:
-    adata"""
+    Integrated adata
+    """
     adata.varm = ""
     adata = setup_anndata_ontovae(adata, ontobj)
     return adata
@@ -102,13 +111,14 @@ def integration(adata, ontobj):
 def trainer(adata, path, learning_rate=1e-4, kl_coefficient=1e-4, batch_size=128, epochs=200):
     """
     Input: 
-    1. adata for training
+    1. An integrated adata for training
     2. path: The output folder
     3. learning_rate: larning rate: 
     4. kl_coefficient
     5. batch_size: Batch size
     
-    Output: Void. A trained scontovae model in the output folder"""
+    Output: Void
+    """
     
     os.makedirs(path, exist_ok=True)
     model = scOntoVAE(adata)
@@ -120,16 +130,17 @@ def trainer(adata, path, learning_rate=1e-4, kl_coefficient=1e-4, batch_size=128
 
 
 def loader(adata, path):
-    """
-    Load the model
+    """Load the model
     Input: 
     
-    1. adata: validation anndata
+    1. An integrated adata: validation anndata
     2. path: model directory
     
     Output:
-    model"""
-
+    model
+    """
+    
+    os.makedirs(path, exist_ok=True)
     # load the best model
     model = scOntoVAE.load(adata=adata,
                         modelpath=path)
@@ -137,8 +148,7 @@ def loader(adata, path):
 
 
 def get_umap_embedding(adata, model):
-    """Get the latent space of adata from the scOntoVAE, 
-    and get its UMAP embedding
+    """Get an UMAP projection to codings from the scOntoVAE
     
     Input:
     1. adata: AnnData
@@ -146,7 +156,8 @@ def get_umap_embedding(adata, model):
     
     Output:
     1. UMAP embedding (a numpy array)
-    2. UMAP embedding (a pandas dataframe). *Easier for making plots*"""
+    2. UMAP embedding (a pandas dataframe).
+    """
     arr = model.to_latent(adata)
 
     import umap
@@ -171,13 +182,24 @@ def get_pw_act(model, adata, file):
     3. file: give the file name (full path) to save the file
     
     Output:
-    The pathway activity pd dataframe"""
-  
-    # compute pathway activities
+    The pathway activity and a file (csv) stored at the assgined file path
+    """
+# compute pathway activities
     act = model.get_pathway_activities()
     df_act = pd.DataFrame(act)
     df_act.index = adata.obs_names
     df_act.columns = list(model.adata.uns['_ontovae']['annot']['Name'])
     df_act.to_csv(file)
     return df_act
+
+def save_fig(image_path, file_name, format, resolution, tight_layout=True):
+    path = os.path.join(image_path, file_name + '.' + format)
+    
+    print("Saving figure: ", file_name)
+    if tight_layout:
+        plt.tight_layout()
+    plt.savefig(path, format=format, dpi=resolution)
+    print("Figure saved: ", file_name)
+
+
 
