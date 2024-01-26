@@ -95,7 +95,6 @@ def setup_anndata_ontovae(adata: AnnData,
 
     ndata = ad.concat([adata, ddata], join="outer", axis=1)
     ndata = ndata[:,ndata.var_names.sort_values()]
-    ndata.var.iloc[:,0] = ndata.var.index.tolist()
     ndata.obs = adata.obs
     ndata.obsm = adata.obsm
     ndata.uns['_ontovae'] = {}
