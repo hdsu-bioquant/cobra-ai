@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import os
 
 import numpy as np
 import pandas as pd
@@ -397,6 +398,9 @@ class scOntoVAE(nn.Module):
         run
             passed here if logging to Neptune should be carried out
         """
+
+        if os.path.isfile(modelpath + '/best_model.pt'):
+            print("A model already exists in the specified directory and will be overwritten.")
 
         if save:
             # save train params

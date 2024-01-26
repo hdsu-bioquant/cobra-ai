@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
 import json
+import os 
+
 import numpy as np
 import pandas as pd
 import torch
@@ -509,6 +511,10 @@ class vanillaCPA(vanillaVAE):
         run
             passed here if logging to Neptune should be carried out
         """
+
+        if os.path.isfile(modelpath + '/best_model.pt'):
+            print("A model already exists in the specified directory and will be overwritten.")
+            
         # save train params
         train_params = {'train_size': train_size,
                         'seed': seed,
