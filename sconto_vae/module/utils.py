@@ -95,6 +95,11 @@ def setup_anndata_ontovae(adata: AnnData,
 
     ndata = ad.concat([adata, ddata], join="outer", axis=1)
     ndata = ndata[:,ndata.var_names.sort_values()]
+    try: 
+        ndata.var.iloc[:,0] = ndata.var.index.tolist() # set the index as first column
+    except:
+        # create first column if it does not exist
+        ndata.var.insert(0, 'index', ndata.var.index.tolist())    
     ndata.obs = adata.obs
     ndata.obsm = adata.obsm
     ndata.uns['_ontovae'] = {}
