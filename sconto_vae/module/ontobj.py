@@ -117,7 +117,7 @@ class Ontobj():
         return annot
 
 
-    def initialize_dag(self, obo: str, gene_annot: str, filter_id: str = None):
+    def initialize_dag(self, obo: str = None, gene_annot: str = None, filter_id: str = None):
 
         """
         Dag is initialized from obo file and annotation.
@@ -126,13 +126,13 @@ class Ontobj():
         Parameters
         -------------
         obo
-            Path to the obo file
+            Path to the obo file if ontology is to be build
 
         gene_annot
             gene_annot
-            Path two a tab-separated 2-column text file
-            Gene1   Term1
-            Gene1   Term2
+            Path two a tab-separated 2-column text file containing gene to geneset annotations
+            Gene1   Geneset1
+            Gene1   Geneset2
             ...
 
         filter_id
@@ -140,79 +140,97 @@ class Ontobj():
             filter_id = 'biological_process'
         """
 
-        # load obo file and gene -> term mapping file
-        dag = get_godag(obo, optional_attrs={'relationship'}, prt=None)
+        if gene_annot is None:
+            raise ValueError("Please provide a file containing gene to geneset mappings.")
+        
         gene_annot = pd.read_csv(gene_annot, sep="\t", header=None)
         gene_annot.columns = ['Gene', 'ID']
-
-        self.identifiers = 'Ensembl' if 'ENS' in gene_annot.iloc[0,0] else 'HGNC'
-
-        # create initial annot file
-        if filter_id is not None:
-            annot = self._dag_annot(dag, gene_annot, filter_id=filter_id)
-        else:
-            annot = self._dag_annot(dag, gene_annot)
-
-        # convert gene annot file to dictionary
-        gene_term_dict = {a: b["ID"].tolist() for a,b in gene_annot.groupby("Gene")}
-
-        # convert the dag to a dictionary
-        term_term_dict = {term_id: [x for x in vars(dag[term_id])['_parents'] if x in annot.ID.tolist()] for term_id in annot[annot.depth > 0].ID.tolist()}
-
-        # reverse the DAG to be able to count descendants and descendant genes
-        gene_dict_rev = reverse_graph(gene_term_dict)
-        term_dict_rev = reverse_graph(term_term_dict)
-
-        # count descendants and descendant genes and add to annot
-        num_desc = []
-        num_genes = []
-
-        for term in annot.ID.tolist():
-            desc = get_descendants(term_dict_rev, term)
-            num_desc.append(len(set(desc)) - 1)
-            genes = get_descendant_genes(gene_dict_rev, desc)
-            num_genes.append(len(set(genes)))
         
-        annot['descendants'] = num_desc
-        annot['desc_genes'] = num_genes
+        if obo is not None:
 
-        # remove terms that don't have any descendant genes
-        annot_updated = annot[annot.desc_genes > 0]
-        annot_updated = annot_updated.sort_values(['depth', 'ID']).reset_index(drop=True)
+            # load obo file and gene -> term mapping file
+            dag = get_godag(obo, optional_attrs={'relationship'}, prt=None)
+            self.identifiers = 'Ensembl' if 'ENS' in gene_annot.iloc[0,0] else 'HGNC'
 
-        # update the dag dict using only the good IDs
-        term_dict = {term_id: [x for x in vars(dag[term_id])['_parents'] if x in annot_updated.ID.tolist()] for term_id in annot_updated[annot_updated.depth > 0].ID.tolist()}
-        term_dict.update(gene_term_dict)
+            # create initial annot file
+            if filter_id is not None:
+                annot = self._dag_annot(dag, gene_annot, filter_id=filter_id)
+            else:
+                annot = self._dag_annot(dag, gene_annot)
 
-        # update the annotation file
+            # convert gene annot file to dictionary
+            gene_term_dict = {a: b["ID"].tolist() for a,b in gene_annot.groupby("Gene")}
 
-        # number of annotated genes
-        term_size = gene_annot['ID'].value_counts().reset_index()
-        term_size.columns = ['ID', 'genes']
-        annot_updated = pd.merge(annot_updated, term_size, how='left', on='ID')
-        annot_updated['genes'] = annot_updated['genes'].fillna(0)
+            # convert the dag to a dictionary
+            term_term_dict = {term_id: [x for x in vars(dag[term_id])['_parents'] if x in annot.ID.tolist()] for term_id in annot[annot.depth > 0].ID.tolist()}
 
-        # recalculate number of children
-        all_parents = list(term_dict.values())
-        all_parents = [item for sublist in all_parents for item in sublist]
-        refined_children = [all_parents.count(pid) - annot_updated[annot_updated.ID == pid].genes.values[0] for pid in annot_updated.ID.tolist()]
-        annot_updated['children'] = refined_children
+            # reverse the DAG to be able to count descendants and descendant genes
+            gene_dict_rev = reverse_graph(gene_term_dict)
+            term_dict_rev = reverse_graph(term_term_dict)
 
-        # recalculate number of descendants
-        term_dict = {term_id: [x for x in vars(dag[term_id])['_parents'] if x in annot_updated.ID.tolist()] for term_id in annot_updated[annot_updated.depth > 0].ID.tolist()}
-        term_dict_rev = reverse_graph(term_dict)
-        num_desc = []
-        for term in annot_updated.ID.tolist():
-            desc = get_descendants(term_dict_rev, term)
-            num_desc.append(len(set(desc)) - 1)
-        annot_updated['descendants'] = num_desc 
+            # count descendants and descendant genes and add to annot
+            num_desc = []
+            num_genes = []
+
+            for term in annot.ID.tolist():
+                desc = get_descendants(term_dict_rev, term)
+                num_desc.append(len(set(desc)) - 1)
+                genes = get_descendant_genes(gene_dict_rev, desc)
+                num_genes.append(len(set(genes)))
+            
+            annot['descendants'] = num_desc
+            annot['desc_genes'] = num_genes
+
+            # remove terms that don't have any descendant genes
+            annot_updated = annot[annot.desc_genes > 0]
+            annot_updated = annot_updated.sort_values(['depth', 'ID']).reset_index(drop=True)
+
+            # update the dag dict using only the good IDs
+            term_dict = {term_id: [x for x in vars(dag[term_id])['_parents'] if x in annot_updated.ID.tolist()] for term_id in annot_updated[annot_updated.depth > 0].ID.tolist()}
+            term_dict.update(gene_term_dict)
+
+            # update the annotation file
+
+            # number of annotated genes
+            term_size = gene_annot['ID'].value_counts().reset_index()
+            term_size.columns = ['ID', 'genes']
+            annot_updated = pd.merge(annot_updated, term_size, how='left', on='ID')
+            annot_updated['genes'] = annot_updated['genes'].fillna(0)
+
+            # recalculate number of children
+            all_parents = list(term_dict.values())
+            all_parents = [item for sublist in all_parents for item in sublist]
+            refined_children = [all_parents.count(pid) - annot_updated[annot_updated.ID == pid].genes.values[0] for pid in annot_updated.ID.tolist()]
+            annot_updated['children'] = refined_children
+
+            # recalculate number of descendants
+            term_dict = {term_id: [x for x in vars(dag[term_id])['_parents'] if x in annot_updated.ID.tolist()] for term_id in annot_updated[annot_updated.depth > 0].ID.tolist()}
+            term_dict_rev = reverse_graph(term_dict)
+            num_desc = []
+            for term in annot_updated.ID.tolist():
+                desc = get_descendants(term_dict_rev, term)
+                num_desc.append(len(set(desc)) - 1)
+            annot_updated['descendants'] = num_desc 
+            term_dict.update(gene_term_dict)
+
+        else:
+            annot_updated = pd.DataFrame(np.sort(gene_annot.ID.unique()))
+            annot_updated.columns = ["ID"]
+            annot_updated["Name"] = annot_updated["ID"]
+            annot_updated['depth'] = 0
+            annot_updated['children'] = 0
+            annot_updated['parents'] = 0
+            annot_updated['descendants'] = 0
+            annot_updated['desc_genes'] = [len(gene_annot[gene_annot.ID == tf]) for tf in annot.ID.tolist()]
+            annot_updated['genes'] = annot_updated['desc_genes']
+
+            term_dict = {g: gene_annot[gene_annot.Gene == g].ID.tolist() for g in gene_annot.Gene.unique()}
 
         # fill the basic slots
         self.annot_base = annot_updated
         self.genes_base = sorted(list(set(gene_annot.Gene.tolist())))
-        term_dict.update(gene_term_dict)
         self.graph_base = term_dict
-
+        
 
     def trim_dag(self, top_thresh: int=1000, bottom_thresh: int=30):
 
