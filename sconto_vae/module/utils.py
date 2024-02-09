@@ -105,9 +105,13 @@ def setup_anndata_ontovae(adata: AnnData,
 
     if batch_key is not None:
         ndata.obs['_ontovae_batch'] = pd.factorize(ndata.obs.loc[:,batch_key])[0]
+    else:
+        ndata.obs['_ontovae_batch'] = 0
     
     if labels_key is not None:
         ndata.obs['_ontovae_labels'] = pd.factorize(ndata.obs.loc[:,labels_key])[0]
+    else:
+        ndata.obs['_ontovae_labels'] = 0
     
     if categorical_covariate_keys is not None:
         ndata.obs['_ontovae_categorical_covs'] = ndata.obs.loc[:,categorical_covariate_keys].apply(lambda x: pd.factorize(x)[0])      
@@ -169,13 +173,17 @@ def setup_anndata_vanillavae(adata: AnnData,
             del adata.layers[k]
 
     if batch_key is not None:
-        ndata.obs['_ontovae_batch'] = pd.factorize(ndata.obs.loc[:,batch_key])[0]
+        adata.obs['_ontovae_batch'] = pd.factorize(adata.obs.loc[:,batch_key])[0]
+    else:
+        adata.obs['_ontovae_batch'] = 0
     
     if labels_key is not None:
-        ndata.obs['_ontovae_labels'] = pd.factorize(ndata.obs.loc[:,labels_key])[0]
-    
+        adata.obs['_ontovae_labels'] = pd.factorize(adata.obs.loc[:,labels_key])[0]
+    else:
+        adata.obs['_ontovae_labels'] = 0
+
     if categorical_covariate_keys is not None:
-        ndata.obs['_ontovae_categorical_covs'] = ndata.obs.loc[:,categorical_covariate_keys].apply(lambda x: pd.factorize(x)[0])      
+        adata.obs['_ontovae_categorical_covs'] = adata.obs.loc[:,categorical_covariate_keys].apply(lambda x: pd.factorize(x)[0])      
 
     if class_key is not None:
         adata.obs['_ontovae_class'] = pd.factorize(adata.obs.loc[:,class_key])[0]
