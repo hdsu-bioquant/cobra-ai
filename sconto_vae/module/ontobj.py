@@ -523,7 +523,7 @@ class Ontobj():
         self.annot_base = pd.DataFrame(ontobj['annot_base'])
         self.genes_base = ontobj['genes_base']
         self.graph_base = ontobj['graph_base']
-        self.annot = {key: pd.DataFrame(value) for key, value in ontobj['annot'].items()}
+        self.annot = {key: pd.DataFrame(value).reset_index(drop=True) for key, value in ontobj['annot'].items()}
         self.genes = ontobj['genes']
         self.graph = ontobj['graph']
         self.desc_genes = ontobj['desc_genes']

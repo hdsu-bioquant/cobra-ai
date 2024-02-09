@@ -459,7 +459,7 @@ def paired_wilcox_test(adata: AnnData, control, perturbed, direction='up', optio
             res = pd.DataFrame({'stat': stat,
                                 'pval' : pvals,
                                 'qval': qvals[1]})
-            res = pd.concat((onto_annot, res))
+            res = pd.concat((onto_annot.reset_index(drop=True), res), axis=1)
         
         else:
             res = pd.DataFrame({'gene': onto_genes,
