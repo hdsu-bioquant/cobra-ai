@@ -144,10 +144,10 @@ class vanillaVAE(nn.Module):
         self.use_activation_lat = use_activation_lat
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-        # parse SCVI information
-        self.batch = adata.obs['_scvi_batch']
-        self.labels = adata.obs['_scvi_labels']
-        self.covs = adata.obsm['_scvi_extra_categorical_covs'] if '_scvi_extra_categorical_covs' in adata.obsm.keys() else None
+        # parse ontovae information
+        self.batch = adata.obs['_ontovae_batch']
+        self.labels = adata.obs['_ontovae_labels']
+        self.covs = adata.obsm['_ontovae_categorical_covs'] if '_ontovae_categorical_covs' in adata.obsm.keys() else None
 
         self.n_cat_list = [len(self.batch.unique()), len(self.labels.unique())]
         if self.covs is not None:
@@ -188,9 +188,9 @@ class vanillaVAE(nn.Module):
         """
         Helper function to aggregate information from adata to use as input for dataloader.
         """
-        covs = adata.obs[['_scvi_batch', '_scvi_labels']]
-        if '_scvi_extra_categorical_covs' in adata.obsm.keys():
-            covs = pd.concat([covs, adata.obsm['_scvi_extra_categorical_covs']], axis=1)
+        covs = adata.obs[['_ontovae_batch', '_ontovae_labels']]
+        if '_ontovae_categorical_covs' in adata.obsm.keys():
+            covs = pd.concat([covs, adata.obsm['_ontovae_categorical_covs']], axis=1)
         return torch.tensor(np.array(covs))
 
     def reparameterize(self, mu, log_var):

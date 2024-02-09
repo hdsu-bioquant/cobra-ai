@@ -18,7 +18,7 @@ from sconto_vae.module.modules import Encoder, OntoDecoder
 from sconto_vae.module.utils import split_adata, FastTensorDataLoader
 
 # imports for autotuning
-from scvi._decorators import classproperty
+from sconto_vae.module.decorators import classproperty
 from sconto_vae.module.autotune import Tunable
 from ray import train
 
@@ -159,10 +159,10 @@ class scOntoVAE(nn.Module):
         self.use_activation_lat = use_activation_lat
         self.activation_fn_dec = activation_fn_dec
 
-        # parse SCVI information
-        self.batch = adata.obs['_scvi_batch']
-        self.labels = adata.obs['_scvi_labels']
-        self.covs = adata.obsm['_scvi_extra_categorical_covs'] if '_scvi_extra_categorical_covs' in adata.obsm.keys() else None
+        # parse covariate information
+        self.batch = adata.obs['_ontovae_batch']
+        self.labels = adata.obs['_ontovae_labels']
+        self.covs = adata.obsm['_ontovae_categorical_covs'] if '_ontovae_categorical_covs' in adata.obsm.keys() else None
 
         self.n_cat_list = [len(self.batch.unique()), len(self.labels.unique())]
         if self.covs is not None:
@@ -205,9 +205,9 @@ class scOntoVAE(nn.Module):
         """
         Helper function to aggregate information from adata to use as input for dataloader.
         """
-        covs = adata.obs[['_scvi_batch', '_scvi_labels']]
-        if '_scvi_extra_categorical_covs' in adata.obsm.keys():
-            covs = pd.concat([covs, adata.obsm['_scvi_extra_categorical_covs']], axis=1)
+        covs = adata.obs[['_ontovae_batch', '_ontovae_labels']]
+        if '_ontovae_categorical_covs' in adata.obsm.keys():
+            covs = pd.concat([covs, adata.obsm['_ontovae_categorical_covs']], axis=1)
         return torch.tensor(np.array(covs))
 
     def reparameterize(self, mu, log_var):

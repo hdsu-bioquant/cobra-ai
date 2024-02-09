@@ -25,10 +25,13 @@ def knn_purity(data, labels: np.ndarray, n_neighbors=30):
     """
     n_samp = data.shape[0]
     if n_neighbors > n_samp:
-        n_neighbors = n_samp - 10
+        if n_samp <= 11:
+            n_neighbors = n_samp
+        else:
+            n_neighbors = n_samp - 10
     labels = LabelEncoder().fit_transform(labels.ravel())
 
-    nbrs = NearestNeighbors(n_neighbors=n_neighbors + 1).fit(data)
+    nbrs = NearestNeighbors(n_neighbors=n_neighbors).fit(data)
     indices = nbrs.kneighbors(data, return_distance=False)[:, 1:]
     neighbors_labels = np.vectorize(lambda i: labels[i])(indices)
 
