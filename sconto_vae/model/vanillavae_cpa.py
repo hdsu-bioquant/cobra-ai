@@ -739,18 +739,19 @@ class vanillaCPA(vanillaVAE):
         if adata is not None:
             if '_ontovae' not in adata.uns.keys():
                 raise ValueError('Please run sconto_vae.module.utils.setup_anndata first.')
+            pdata = adata.copy()
         else:
-            adata = self.adata
+            pdata = self.adata.copy()
 
         # get indices of the genes in list
-        gindices = [self.adata.uns['_ontovae']['genes'].index(g) for g in genes]
+        gindices = [pdata.uns['_ontovae']['genes'].index(g) for g in genes]
 
         # replace their values
         for i in range(len(genes)):
-            adata.X[:,gindices[i]] = values[i]
+            pdata.X[:,gindices[i]] = values[i]
 
         # run perturbed data through network
-        res = self._run_batches(adata, 'rec')
+        res = self._run_batches(pdata, 'rec')
 
         return res
     

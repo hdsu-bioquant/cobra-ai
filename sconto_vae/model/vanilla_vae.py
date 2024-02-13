@@ -522,17 +522,19 @@ class vanillaVAE(nn.Module):
         self.eval()
 
         if adata is None:
-            adata = self.adata
+            pdata = self.adata.copy()
+        else:
+            pdata = adata.copy()
 
         # get indices of the genes in list
-        gindices = [list(adata.var_names).index(g) for g in genes]
+        gindices = [list(pdata.var_names).index(g) for g in genes]
 
         # replace their values
         for i in range(len(genes)):
-            adata.X[:,gindices[i]] = values[i]
+            pdata.X[:,gindices[i]] = values[i]
 
         # get reconstructed values
-        rec = self._run_batches(adata, retrieve='rec')
+        rec = self._run_batches(pdata, retrieve='rec')
     
         return rec
         
