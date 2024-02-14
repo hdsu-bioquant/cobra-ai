@@ -221,7 +221,7 @@ class Ontobj():
             annot_updated['children'] = 0
             annot_updated['parents'] = 0
             annot_updated['descendants'] = 0
-            annot_updated['desc_genes'] = [len(gene_annot[gene_annot.ID == tf]) for tf in annot.ID.tolist()]
+            annot_updated['desc_genes'] = [len(gene_annot[gene_annot.ID == tf]) for tf in annot_updated.ID.tolist()]
             annot_updated['genes'] = annot_updated['desc_genes']
 
             term_dict = {g: gene_annot[gene_annot.Gene == g].ID.tolist() for g in gene_annot.Gene.unique()}
@@ -257,11 +257,6 @@ class Ontobj():
             raise ValueError('Initial annotation has not been created, initialize_dag function needs to be run first!')
         else:
             annot_base = self.annot_base.copy()
-
-        if self.genes_base is None:
-            raise ValueError('Initial gene list has not been created, initialize_dag function needs to be run first!')
-        else:
-            genes_base = self.genes_base.copy()
 
         # get terms for trimming
         top_terms = annot_base[annot_base.desc_genes > top_thresh].ID.tolist()
