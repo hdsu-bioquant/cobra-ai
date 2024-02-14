@@ -600,6 +600,9 @@ class scOntoVAE(nn.Module):
         lin_layer
             whether linear layer should be used for calculation
         """
+        if len(self.decoder.decoder) == 1:
+            raise ValueError('Pathway activities cannot be computed for a one-layer network.')
+
         self.eval()
         res = self._run_batches(adata, 'act', lin_layer)
         return res
