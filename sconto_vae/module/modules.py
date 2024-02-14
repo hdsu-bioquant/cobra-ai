@@ -343,6 +343,8 @@ class OntoDecoder(nn.Module):
         Whether to inject covariates in each layer (True), or just the last (False).
     drop
         dropout rate
+    pos_weights
+        whether to make all decoder weights positive
     """ 
 
     def __init__(self, 
@@ -359,7 +361,8 @@ class OntoDecoder(nn.Module):
                  activation_fn: nn.Module = nn.ReLU,
                  bias: bool = True,
                  inject_covariates: bool = False,
-                 drop: float = 0):
+                 drop: float = 0,
+                 pos_weights: bool = True):
         super().__init__()
 
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -376,6 +379,7 @@ class OntoDecoder(nn.Module):
         self.masks.append(mask_list[-1].repeat_interleave(neuronnum, dim=1).to(self.device))
         self.latent_dim = latent_dim
         self.drop = drop
+        self.pos_weights = pos_weights
 
         if n_cat_list is not None:
             # n_cat = 1 will be ignored
@@ -438,8 +442,9 @@ class OntoDecoder(nn.Module):
             self.decoder[i][0].weight.data = torch.mul(self.decoder[i][0].weight.data, self.masks[i-self.start_point])
 
         # make all weights in decoder positive
-        for i in range(self.start_point, len(self.decoder)):
-            self.decoder[i][0].weight.data = self.decoder[i][0].weight.data.clamp(0)
+        if self.pos_weights:
+            for i in range(self.start_point, len(self.decoder)):
+                self.decoder[i][0].weight.data = self.decoder[i][0].weight.data.clamp(0)
 
 
     def forward(self, z: torch.tensor, cat_list: Iterable[torch.tensor]):

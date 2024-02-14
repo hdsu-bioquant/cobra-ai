@@ -276,6 +276,7 @@ class scOntoVAE(nn.Module):
                     dataloader: FastTensorDataLoader, 
                     kl_coeff: float, 
                     optimizer: optim.Optimizer, 
+                    pos_weights: bool,
                     run=None):
         """
         Parameters
@@ -319,8 +320,9 @@ class scOntoVAE(nn.Module):
             optimizer.step()
 
             # make weights in Onto module positive
-            for i in range(self.start_point, len(self.decoder.decoder)):
-                self.decoder.decoder[i][0].weight.data = self.decoder.decoder[i][0].weight.data.clamp(0)
+            if pos_weights:
+                for i in range(self.start_point, len(self.decoder.decoder)):
+                    self.decoder.decoder[i][0].weight.data = self.decoder.decoder[i][0].weight.data.clamp(0)
 
         # compute avg training loss
         train_loss = running_loss/len(dataloader)
@@ -372,6 +374,7 @@ class scOntoVAE(nn.Module):
                     kl_coeff: float=1e-4, 
                     batch_size: int=128, 
                     optimizer: optim.Optimizer = optim.AdamW,
+                    pos_weights: bool = True,
                     epochs: int=300, 
                     run=None):
         """
@@ -393,6 +396,8 @@ class scOntoVAE(nn.Module):
             size of minibatches
         optimizer
             which optimizer to use
+        pos_weights
+            whether to make weights in decoder positive
         epochs
             over how many epochs to train
         run
@@ -410,6 +415,7 @@ class scOntoVAE(nn.Module):
                             'kl_coeff': kl_coeff,
                             'batch_size': batch_size,
                             'optimizer': str(optimizer).split("'")[1],
+                            'pos_weights': pos_weights,
                             'epochs': epochs
                             }
             with open(modelpath + '/train_params.json', 'w') as fp:
@@ -448,7 +454,7 @@ class scOntoVAE(nn.Module):
 
         for epoch in range(epochs):
             print(f"Epoch {epoch+1} of {epochs}")
-            train_epoch_loss = self.train_round(trainloader, kl_coeff, optimizer, run)
+            train_epoch_loss = self.train_round(trainloader, kl_coeff, optimizer, pos_weights, run)
             val_epoch_loss = self.val_round(valloader, kl_coeff, run)
             train.report({"validation_loss": val_epoch_loss})
 
