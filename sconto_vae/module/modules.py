@@ -337,6 +337,8 @@ class OntoDecoder(nn.Module):
         Whether to have layer activation or not
     activation_fn
         Which activation function to use
+    rec_activation
+        activation function for the reconstruction layer, eg. nn.Sigmoid
     bias
         Whether to learn bias in linear layers or not
     inject_covariates
@@ -359,6 +361,7 @@ class OntoDecoder(nn.Module):
                  use_layer_norm: bool = False,
                  use_activation: bool = False,
                  activation_fn: nn.Module = nn.ReLU,
+                 rec_activation: nn.Module = None,
                  bias: bool = True,
                  inject_covariates: bool = False,
                  drop: float = 0,
@@ -406,7 +409,8 @@ class OntoDecoder(nn.Module):
 
             [
                 nn.Sequential(
-                    nn.Linear(self.layer_shapes[-1][0] + self.cat_dim, self.in_features)
+                    nn.Linear(self.layer_shapes[-1][0] + self.cat_dim, self.in_features),
+                    rec_activation() if rec_activation is not None else None
                 )
             ]
             )

@@ -67,6 +67,8 @@ class scOntoVAE(nn.Module):
         Whether to use the decoder activation function after latent space sampling (not recommended)
     activation_fn_dec
         Which activation function to use in decoder
+    rec_activation
+        activation function for the reconstruction layer, e.g. nn.Sigmoid
     bias_dec
         Whether to learn bias in linear layers or not in decoder
     inject_covariates_dec
@@ -83,6 +85,8 @@ class scOntoVAE(nn.Module):
             params['activation_fn_enc'] = eval(params['activation_fn_enc'])
         if params['activation_fn_dec'] is not None:
             params['activation_fn_dec'] = eval(params['activation_fn_dec'])
+        if params['rec_activation'] is not None:
+            params['rec_activation'] = eval(params['rec_activation'])
         model = cls(adata, **params) 
         checkpoint = torch.load(modelpath + '/best_model.pt',
                             map_location = torch.device(model.device))
@@ -108,6 +112,7 @@ class scOntoVAE(nn.Module):
                  use_activation_dec: bool = False,
                  use_activation_lat: bool = False,
                  activation_fn_dec: nn.Module = nn.Tanh,
+                 rec_activation: nn.Module = None,
                  bias_dec: bool = True,
                  inject_covariates_dec: bool = False,
                  drop_dec: float = 0):
@@ -131,6 +136,7 @@ class scOntoVAE(nn.Module):
                           'use_activation_dec': use_activation_dec,
                           'use_activation_lat': use_activation_lat,
                           'activation_fn_dec': str(activation_fn_dec).split("'")[1] if activation_fn_dec is not None else activation_fn_dec,
+                          'rec_activation': str(rec_activation).split("'")[1] if rec_activation is not None else rec_activation,
                           'bias_dec': bias_dec,
                           'inject_covariates_dec': inject_covariates_dec,
                           'drop_dec': drop_dec}
@@ -158,6 +164,7 @@ class scOntoVAE(nn.Module):
         self.use_activation_dec = use_activation_dec
         self.use_activation_lat = use_activation_lat
         self.activation_fn_dec = activation_fn_dec
+        self.rec_activation = rec_activation
 
         # parse covariate information
         self.batch = adata.obs['_ontovae_batch']
@@ -195,6 +202,7 @@ class scOntoVAE(nn.Module):
                                     use_layer_norm = use_layer_norm_dec,
                                     use_activation = use_activation_dec,
                                     activation_fn = activation_fn_dec,
+                                    rec_activation = rec_activation,
                                     bias = bias_dec,
                                     inject_covariates = inject_covariates_dec,
                                     drop = drop_dec)
