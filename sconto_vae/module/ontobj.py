@@ -258,74 +258,86 @@ class Ontobj():
         else:
             annot_base = self.annot_base.copy()
 
-        # get terms for trimming
-        top_terms = annot_base[annot_base.desc_genes > top_thresh].ID.tolist()
-        bottom_terms = annot_base[annot_base.desc_genes < bottom_thresh].ID.tolist()[::-1]
+        if len(annot_base.depth.unique()) > 1:
 
-        # trim the DAG
-        with contextlib.redirect_stdout(io.StringIO()):
-            term_dict_ttrim = trim_DAG_top(graph_base, annot_base.ID.tolist(), top_terms)
-        with contextlib.redirect_stdout(io.StringIO()):
-            term_dict_trim = trim_DAG_bottom(term_dict_ttrim, annot_base.ID.tolist(), bottom_terms)
 
-        ### ANNOTATION FILE UPDATE ###
+            # get terms for trimming
+            top_terms = annot_base[annot_base.desc_genes > top_thresh].ID.tolist()
+            bottom_terms = annot_base[annot_base.desc_genes < bottom_thresh].ID.tolist()[::-1]
 
-        # adjust the annotation file
-        new_annot = annot_base[annot_base.ID.isin(top_terms + bottom_terms) == False].reset_index(drop=True)
+            # trim the DAG
+            with contextlib.redirect_stdout(io.StringIO()):
+                term_dict_ttrim = trim_DAG_top(graph_base, annot_base.ID.tolist(), top_terms)
+            with contextlib.redirect_stdout(io.StringIO()):
+                term_dict_trim = trim_DAG_bottom(term_dict_ttrim, annot_base.ID.tolist(), bottom_terms)
 
-        # split the DAG
-        term_trim = {key: term_dict_trim[key] for key in list(term_dict_trim.keys()) if key in new_annot.ID.tolist()}
-        gene_trim = {key: term_dict_trim[key] for key in list(term_dict_trim.keys()) if key not in new_annot.ID.tolist()}  
+            ### ANNOTATION FILE UPDATE ###
 
-        # reverse the separate DAGs
-        term_trim_rev = reverse_graph(term_trim)
-        gene_trim_rev = reverse_graph(gene_trim)
+            # adjust the annotation file
+            new_annot = annot_base[annot_base.ID.isin(top_terms + bottom_terms) == False].reset_index(drop=True)
 
-        # calculate new children, parent and gene numbers
-        new_children = [len(term_trim_rev[term]) if term in list(term_trim_rev.keys()) else 0 for term in new_annot.ID.tolist()]
-        new_parents = [len(term_trim[term]) if term in list(term_trim.keys()) else 0 for term in new_annot.ID.tolist()]
-        new_genes = [len(gene_trim_rev[term]) if term in list(gene_trim_rev.keys()) else 0 for term in new_annot.ID.tolist()]
+            # split the DAG
+            term_trim = {key: term_dict_trim[key] for key in list(term_dict_trim.keys()) if key in new_annot.ID.tolist()}
+            gene_trim = {key: term_dict_trim[key] for key in list(term_dict_trim.keys()) if key not in new_annot.ID.tolist()}  
 
-        # calculate new descendants and descendant genes
-        num_desc = []
-        num_genes = []
+            # reverse the separate DAGs
+            term_trim_rev = reverse_graph(term_trim)
+            gene_trim_rev = reverse_graph(gene_trim)
 
-        desc_genes = {}
+            # calculate new children, parent and gene numbers
+            new_children = [len(term_trim_rev[term]) if term in list(term_trim_rev.keys()) else 0 for term in new_annot.ID.tolist()]
+            new_parents = [len(term_trim[term]) if term in list(term_trim.keys()) else 0 for term in new_annot.ID.tolist()]
+            new_genes = [len(gene_trim_rev[term]) if term in list(gene_trim_rev.keys()) else 0 for term in new_annot.ID.tolist()]
 
-        for term in new_annot.ID.tolist():
-            desc = get_descendants(term_trim_rev, term)
-            num_desc.append(len(set(desc)) - 1)
-            genes = set(get_descendant_genes(gene_trim_rev, desc))
-            desc_genes[term] = list(genes)
-            num_genes.append(len(genes))
-        
-        # update the annot file
-        new_annot['children'] = new_children
-        new_annot['parents'] = new_parents
-        new_annot['genes'] = new_genes
-        new_annot['descendants'] = num_desc
-        new_annot['desc_genes'] = num_genes
+            # calculate new descendants and descendant genes
+            num_desc = []
+            num_genes = []
 
-        # set the depth of all terms with 0 parents to 0
-        new_annot.loc[new_annot.parents == 0, 'depth'] = 0
+            desc_genes = {}
 
-        # adjust depth of other terms
-        min_depth = np.min(new_annot['depth'][new_annot['depth'] != 0])
+            for term in new_annot.ID.tolist():
+                desc = get_descendants(term_trim_rev, term)
+                num_desc.append(len(set(desc)) - 1)
+                genes = set(get_descendant_genes(gene_trim_rev, desc))
+                desc_genes[term] = list(genes)
+                num_genes.append(len(genes))
+            
+            # update the annot file
+            new_annot['children'] = new_children
+            new_annot['parents'] = new_parents
+            new_annot['genes'] = new_genes
+            new_annot['descendants'] = num_desc
+            new_annot['desc_genes'] = num_genes
 
-        def adjust_depth(row):
-            if row['depth'] > 0:
-                return row['depth'] - (min_depth - 1)
-            else:
-                return 0
-        
-        new_annot['depth'] = new_annot.apply(lambda row: adjust_depth(row), axis=1)
-        new_annot = new_annot.sort_values(['depth', 'ID']).reset_index(drop=True)
+            # set the depth of all terms with 0 parents to 0
+            new_annot.loc[new_annot.parents == 0, 'depth'] = 0
+
+            # adjust depth of other terms
+            min_depth = np.min(new_annot['depth'][new_annot['depth'] != 0])
+
+            def adjust_depth(row):
+                if row['depth'] > 0:
+                    return row['depth'] - (min_depth - 1)
+                else:
+                    return 0
+            
+            new_annot['depth'] = new_annot.apply(lambda row: adjust_depth(row), axis=1)
+            new_annot = new_annot.sort_values(['depth', 'ID']).reset_index(drop=True)
+
+        else:
+            new_annot = annot_base[(annot_base.genes >= bottom_thresh) & (annot_base.genes <= top_thresh)]
+            graph_rev = reverse_graph(graph_base)
+            graph_rev_trim = {key: graph_rev[key] for key in list(graph_rev.keys()) if key in new_annot.ID.tolist()}
+            term_dict_trim = reverse_graph(graph_rev_trim)
+            gene_trim = term_dict_trim 
+            desc_genes = graph_rev_trim
 
         # save trimming results in respective slots
         self.annot[str(top_thresh) + '_' + str(bottom_thresh)] = new_annot
         self.graph[str(top_thresh) + '_' + str(bottom_thresh)] = term_dict_trim
         self.genes[str(top_thresh) + '_' + str(bottom_thresh)] = sorted(list(gene_trim.keys()))
         self.desc_genes[str(top_thresh) + '_' + str(bottom_thresh)] = desc_genes
+
 
 
     def create_masks(self, top_thresh: int=1000, bottom_thresh: int=30):
