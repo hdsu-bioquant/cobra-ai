@@ -5,7 +5,7 @@
 from inspect import isfunction
 from typing import Any, List
 
-from scvi._decorators import classproperty
+from sconto_vae.module.decorators import classproperty
 
 
 class TunableMeta(type):

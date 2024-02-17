@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import os
 
 import numpy as np
 import pandas as pd
@@ -143,10 +144,10 @@ class vanillaVAE(nn.Module):
         self.use_activation_lat = use_activation_lat
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-        # parse SCVI information
-        self.batch = adata.obs['_scvi_batch']
-        self.labels = adata.obs['_scvi_labels']
-        self.covs = adata.obsm['_scvi_extra_categorical_covs'] if '_scvi_extra_categorical_covs' in adata.obsm.keys() else None
+        # parse ontovae information
+        self.batch = adata.obs['_ontovae_batch']
+        self.labels = adata.obs['_ontovae_labels']
+        self.covs = adata.obsm['_ontovae_categorical_covs'] if '_ontovae_categorical_covs' in adata.obsm.keys() else None
 
         self.n_cat_list = [len(self.batch.unique()), len(self.labels.unique())]
         if self.covs is not None:
@@ -187,9 +188,9 @@ class vanillaVAE(nn.Module):
         """
         Helper function to aggregate information from adata to use as input for dataloader.
         """
-        covs = adata.obs[['_scvi_batch', '_scvi_labels']]
-        if '_scvi_extra_categorical_covs' in adata.obsm.keys():
-            covs = pd.concat([covs, adata.obsm['_scvi_extra_categorical_covs']], axis=1)
+        covs = adata.obs[['_ontovae_batch', '_ontovae_labels']]
+        if '_ontovae_categorical_covs' in adata.obsm.keys():
+            covs = pd.concat([covs, adata.obsm['_ontovae_categorical_covs']], axis=1)
         return torch.tensor(np.array(covs))
 
     def reparameterize(self, mu, log_var):
@@ -369,6 +370,10 @@ class vanillaVAE(nn.Module):
         run
             passed here if logging to Neptune should be carried out
         """
+
+        if os.path.isfile(modelpath + '/best_model.pt'):
+            print("A model already exists in the specified directory and will be overwritten.")
+            
         # save train params
         train_params = {'train_size': train_size,
                         'seed': seed,
@@ -517,17 +522,19 @@ class vanillaVAE(nn.Module):
         self.eval()
 
         if adata is None:
-            adata = self.adata
+            pdata = self.adata.copy()
+        else:
+            pdata = adata.copy()
 
         # get indices of the genes in list
-        gindices = [list(adata.var_names).index(g) for g in genes]
+        gindices = [list(pdata.var_names).index(g) for g in genes]
 
         # replace their values
         for i in range(len(genes)):
-            adata.X[:,gindices[i]] = values[i]
+            pdata.X[:,gindices[i]] = values[i]
 
         # get reconstructed values
-        rec = self._run_batches(adata, retrieve='rec')
+        rec = self._run_batches(pdata, retrieve='rec')
     
         return rec
         

@@ -337,12 +337,16 @@ class OntoDecoder(nn.Module):
         Whether to have layer activation or not
     activation_fn
         Which activation function to use
+    rec_activation
+        activation function for the reconstruction layer, eg. nn.Sigmoid
     bias
         Whether to learn bias in linear layers or not
     inject_covariates
         Whether to inject covariates in each layer (True), or just the last (False).
     drop
         dropout rate
+    pos_weights
+        whether to make all decoder weights positive
     """ 
 
     def __init__(self, 
@@ -357,9 +361,11 @@ class OntoDecoder(nn.Module):
                  use_layer_norm: bool = False,
                  use_activation: bool = False,
                  activation_fn: nn.Module = nn.ReLU,
+                 rec_activation: nn.Module = None,
                  bias: bool = True,
                  inject_covariates: bool = False,
-                 drop: float = 0):
+                 drop: float = 0,
+                 pos_weights: bool = True):
         super().__init__()
 
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -376,6 +382,7 @@ class OntoDecoder(nn.Module):
         self.masks.append(mask_list[-1].repeat_interleave(neuronnum, dim=1).to(self.device))
         self.latent_dim = latent_dim
         self.drop = drop
+        self.pos_weights = pos_weights
 
         if n_cat_list is not None:
             # n_cat = 1 will be ignored
@@ -402,7 +409,8 @@ class OntoDecoder(nn.Module):
 
             [
                 nn.Sequential(
-                    nn.Linear(self.layer_shapes[-1][0] + self.cat_dim, self.in_features)
+                    nn.Linear(self.layer_shapes[-1][0] + self.cat_dim, self.in_features),
+                    rec_activation() if rec_activation is not None else None
                 )
             ]
             )
@@ -438,8 +446,9 @@ class OntoDecoder(nn.Module):
             self.decoder[i][0].weight.data = torch.mul(self.decoder[i][0].weight.data, self.masks[i-self.start_point])
 
         # make all weights in decoder positive
-        for i in range(self.start_point, len(self.decoder)):
-            self.decoder[i][0].weight.data = self.decoder[i][0].weight.data.clamp(0)
+        if self.pos_weights:
+            for i in range(self.start_point, len(self.decoder)):
+                self.decoder[i][0].weight.data = self.decoder[i][0].weight.data.clamp(0)
 
 
     def forward(self, z: torch.tensor, cat_list: Iterable[torch.tensor]):

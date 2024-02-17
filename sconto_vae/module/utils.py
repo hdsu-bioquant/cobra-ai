@@ -3,9 +3,6 @@ import pandas as pd
 import torch
 import pkg_resources
 from scipy.sparse import csr_matrix
-from scvi import REGISTRY_KEYS
-from scvi.data import AnnDataManager
-from scvi.data.fields import CategoricalObsField, CategoricalJointObsField, LayerField
 import anndata as ad
 from anndata import AnnData
 from sconto_vae.module.ontobj import Ontobj
@@ -80,7 +77,9 @@ def setup_anndata_ontovae(adata: AnnData,
     if len(list(adata.layers.keys())) > 0:
         for k in list(adata.layers.keys()):
             del adata.layers[k]
-         
+    
+    adata.varm = ""
+
     genes = ontobj.extract_genes(top_thresh=top_thresh, bottom_thresh=bottom_thresh)
     adata = adata[:,adata.var_names.isin(genes)].copy()
 
@@ -95,7 +94,7 @@ def setup_anndata_ontovae(adata: AnnData,
 
     ndata = ad.concat([adata, ddata], join="outer", axis=1)
     ndata = ndata[:,ndata.var_names.sort_values()]
-    ndata.var.iloc[:,0] = ndata.var.index.tolist()
+ 
     ndata.obs = adata.obs
     ndata.obsm = adata.obsm
     ndata.uns['_ontovae'] = {}
@@ -104,26 +103,24 @@ def setup_anndata_ontovae(adata: AnnData,
     ndata.uns['_ontovae']['genes'] = ontobj.extract_genes(top_thresh=top_thresh, bottom_thresh=bottom_thresh)
     ndata.uns['_ontovae']['masks'] = ontobj.extract_masks(top_thresh=top_thresh, bottom_thresh=bottom_thresh)
 
+    if batch_key is not None:
+        ndata.obs['_ontovae_batch'] = pd.factorize(ndata.obs.loc[:,batch_key])[0]
+    else:
+        ndata.obs['_ontovae_batch'] = 0
+    
+    if labels_key is not None:
+        ndata.obs['_ontovae_labels'] = pd.factorize(ndata.obs.loc[:,labels_key])[0]
+    else:
+        ndata.obs['_ontovae_labels'] = 0
+    
+    if categorical_covariate_keys is not None:
+        ndata.obs['_ontovae_categorical_covs'] = ndata.obs.loc[:,categorical_covariate_keys].apply(lambda x: pd.factorize(x)[0])      
+
     if class_key is not None:
         ndata.obs['_ontovae_class'] = pd.factorize(ndata.obs.loc[:,class_key])[0]
     
     if cpa_keys is not None:
          ndata.obsm['_cpa_categorical_covs'] = ndata.obs.loc[:,cpa_keys].apply(lambda x: pd.factorize(x)[0])
-
-    # register SCVI fields
-    ndata = ndata.copy()
-    anndata_fields = [
-            LayerField(REGISTRY_KEYS.X_KEY, layer=None, is_count_data=False),
-            CategoricalObsField(REGISTRY_KEYS.BATCH_KEY, batch_key),
-            CategoricalObsField(REGISTRY_KEYS.LABELS_KEY, labels_key),
-            CategoricalJointObsField(
-                REGISTRY_KEYS.CAT_COVS_KEY, categorical_covariate_keys
-            )
-        ]
-    adata_manager = AnnDataManager(
-        fields=anndata_fields
-    )
-    adata_manager.register_fields(ndata)
     
     return ndata
 
@@ -175,26 +172,24 @@ def setup_anndata_vanillavae(adata: AnnData,
         for k in list(adata.layers.keys()):
             del adata.layers[k]
 
+    if batch_key is not None:
+        adata.obs['_ontovae_batch'] = pd.factorize(adata.obs.loc[:,batch_key])[0]
+    else:
+        adata.obs['_ontovae_batch'] = 0
+    
+    if labels_key is not None:
+        adata.obs['_ontovae_labels'] = pd.factorize(adata.obs.loc[:,labels_key])[0]
+    else:
+        adata.obs['_ontovae_labels'] = 0
+
+    if categorical_covariate_keys is not None:
+        adata.obs['_ontovae_categorical_covs'] = adata.obs.loc[:,categorical_covariate_keys].apply(lambda x: pd.factorize(x)[0])      
+
     if class_key is not None:
         adata.obs['_ontovae_class'] = pd.factorize(adata.obs.loc[:,class_key])[0]
     
     if cpa_keys is not None:
          adata.obsm['_cpa_categorical_covs'] = adata.obs.loc[:,cpa_keys].apply(lambda x: pd.factorize(x)[0])
-
-    # register SCVI fields
-    adata = adata.copy()
-    anndata_fields = [
-            LayerField(REGISTRY_KEYS.X_KEY, layer=None, is_count_data=False),
-            CategoricalObsField(REGISTRY_KEYS.BATCH_KEY, batch_key),
-            CategoricalObsField(REGISTRY_KEYS.LABELS_KEY, labels_key),
-            CategoricalJointObsField(
-                REGISTRY_KEYS.CAT_COVS_KEY, categorical_covariate_keys
-            )
-        ]
-    adata_manager = AnnDataManager(
-        fields=anndata_fields
-    )
-    adata_manager.register_fields(adata)
     
     return adata
 
@@ -380,7 +375,7 @@ def calculate_auc(adata: AnnData, X: np.array, y: np.array, n_splits: int=10):
         return np.nanmedian(np.array(auc))
     
     auc = [cross_val_auc(X[:,i].reshape(-1,1), y) for i in range(X.shape[1])]
-    annot = adata.uns['_ontovae']['annot']
+    annot = adata.uns['_ontovae']['annot'].copy()
     annot['auc'] = auc
     return annot
 
@@ -464,7 +459,7 @@ def paired_wilcox_test(adata: AnnData, control, perturbed, direction='up', optio
             res = pd.DataFrame({'stat': stat,
                                 'pval' : pvals,
                                 'qval': qvals[1]})
-            res = pd.concat((onto_annot, res))
+            res = pd.concat((onto_annot.reset_index(drop=True), res), axis=1)
         
         else:
             res = pd.DataFrame({'gene': onto_genes,

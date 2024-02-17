@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import os
 
 import numpy as np
 import pandas as pd
@@ -17,7 +18,7 @@ from sconto_vae.module.modules import Encoder, OntoDecoder
 from sconto_vae.module.utils import split_adata, FastTensorDataLoader
 
 # imports for autotuning
-from scvi._decorators import classproperty
+from sconto_vae.module.decorators import classproperty
 from sconto_vae.module.autotune import Tunable
 from ray import train
 
@@ -66,6 +67,8 @@ class scOntoVAE(nn.Module):
         Whether to use the decoder activation function after latent space sampling (not recommended)
     activation_fn_dec
         Which activation function to use in decoder
+    rec_activation
+        activation function for the reconstruction layer, e.g. nn.Sigmoid
     bias_dec
         Whether to learn bias in linear layers or not in decoder
     inject_covariates_dec
@@ -82,6 +85,8 @@ class scOntoVAE(nn.Module):
             params['activation_fn_enc'] = eval(params['activation_fn_enc'])
         if params['activation_fn_dec'] is not None:
             params['activation_fn_dec'] = eval(params['activation_fn_dec'])
+        if params['rec_activation'] is not None:
+            params['rec_activation'] = eval(params['rec_activation'])
         model = cls(adata, **params) 
         checkpoint = torch.load(modelpath + '/best_model.pt',
                             map_location = torch.device(model.device))
@@ -107,6 +112,7 @@ class scOntoVAE(nn.Module):
                  use_activation_dec: bool = False,
                  use_activation_lat: bool = False,
                  activation_fn_dec: nn.Module = nn.Tanh,
+                 rec_activation: nn.Module = None,
                  bias_dec: bool = True,
                  inject_covariates_dec: bool = False,
                  drop_dec: float = 0):
@@ -130,6 +136,7 @@ class scOntoVAE(nn.Module):
                           'use_activation_dec': use_activation_dec,
                           'use_activation_lat': use_activation_lat,
                           'activation_fn_dec': str(activation_fn_dec).split("'")[1] if activation_fn_dec is not None else activation_fn_dec,
+                          'rec_activation': str(rec_activation).split("'")[1] if rec_activation is not None else rec_activation,
                           'bias_dec': bias_dec,
                           'inject_covariates_dec': inject_covariates_dec,
                           'drop_dec': drop_dec}
@@ -157,11 +164,12 @@ class scOntoVAE(nn.Module):
         self.use_activation_dec = use_activation_dec
         self.use_activation_lat = use_activation_lat
         self.activation_fn_dec = activation_fn_dec
+        self.rec_activation = rec_activation
 
-        # parse SCVI information
-        self.batch = adata.obs['_scvi_batch']
-        self.labels = adata.obs['_scvi_labels']
-        self.covs = adata.obsm['_scvi_extra_categorical_covs'] if '_scvi_extra_categorical_covs' in adata.obsm.keys() else None
+        # parse covariate information
+        self.batch = adata.obs['_ontovae_batch']
+        self.labels = adata.obs['_ontovae_labels']
+        self.covs = adata.obsm['_ontovae_categorical_covs'] if '_ontovae_categorical_covs' in adata.obsm.keys() else None
 
         self.n_cat_list = [len(self.batch.unique()), len(self.labels.unique())]
         if self.covs is not None:
@@ -194,6 +202,7 @@ class scOntoVAE(nn.Module):
                                     use_layer_norm = use_layer_norm_dec,
                                     use_activation = use_activation_dec,
                                     activation_fn = activation_fn_dec,
+                                    rec_activation = rec_activation,
                                     bias = bias_dec,
                                     inject_covariates = inject_covariates_dec,
                                     drop = drop_dec)
@@ -204,9 +213,9 @@ class scOntoVAE(nn.Module):
         """
         Helper function to aggregate information from adata to use as input for dataloader.
         """
-        covs = adata.obs[['_scvi_batch', '_scvi_labels']]
-        if '_scvi_extra_categorical_covs' in adata.obsm.keys():
-            covs = pd.concat([covs, adata.obsm['_scvi_extra_categorical_covs']], axis=1)
+        covs = adata.obs[['_ontovae_batch', '_ontovae_labels']]
+        if '_ontovae_categorical_covs' in adata.obsm.keys():
+            covs = pd.concat([covs, adata.obsm['_ontovae_categorical_covs']], axis=1)
         return torch.tensor(np.array(covs))
 
     def reparameterize(self, mu, log_var):
@@ -275,6 +284,7 @@ class scOntoVAE(nn.Module):
                     dataloader: FastTensorDataLoader, 
                     kl_coeff: float, 
                     optimizer: optim.Optimizer, 
+                    pos_weights: bool,
                     run=None):
         """
         Parameters
@@ -318,8 +328,9 @@ class scOntoVAE(nn.Module):
             optimizer.step()
 
             # make weights in Onto module positive
-            for i in range(self.start_point, len(self.decoder.decoder)):
-                self.decoder.decoder[i][0].weight.data = self.decoder.decoder[i][0].weight.data.clamp(0)
+            if pos_weights:
+                for i in range(self.start_point, len(self.decoder.decoder)):
+                    self.decoder.decoder[i][0].weight.data = self.decoder.decoder[i][0].weight.data.clamp(0)
 
         # compute avg training loss
         train_loss = running_loss/len(dataloader)
@@ -371,6 +382,7 @@ class scOntoVAE(nn.Module):
                     kl_coeff: float=1e-4, 
                     batch_size: int=128, 
                     optimizer: optim.Optimizer = optim.AdamW,
+                    pos_weights: bool = True,
                     epochs: int=300, 
                     run=None):
         """
@@ -392,11 +404,16 @@ class scOntoVAE(nn.Module):
             size of minibatches
         optimizer
             which optimizer to use
+        pos_weights
+            whether to make weights in decoder positive
         epochs
             over how many epochs to train
         run
             passed here if logging to Neptune should be carried out
         """
+
+        if os.path.isfile(modelpath + '/best_model.pt'):
+            print("A model already exists in the specified directory and will be overwritten.")
 
         if save:
             # save train params
@@ -406,6 +423,7 @@ class scOntoVAE(nn.Module):
                             'kl_coeff': kl_coeff,
                             'batch_size': batch_size,
                             'optimizer': str(optimizer).split("'")[1],
+                            'pos_weights': pos_weights,
                             'epochs': epochs
                             }
             with open(modelpath + '/train_params.json', 'w') as fp:
@@ -444,7 +462,7 @@ class scOntoVAE(nn.Module):
 
         for epoch in range(epochs):
             print(f"Epoch {epoch+1} of {epochs}")
-            train_epoch_loss = self.train_round(trainloader, kl_coeff, optimizer, run)
+            train_epoch_loss = self.train_round(trainloader, kl_coeff, optimizer, pos_weights, run)
             val_epoch_loss = self.val_round(valloader, kl_coeff, run)
             train.report({"validation_loss": val_epoch_loss})
 
@@ -596,6 +614,9 @@ class scOntoVAE(nn.Module):
         lin_layer
             whether linear layer should be used for calculation
         """
+        if len(self.decoder.decoder) == 1:
+            raise ValueError('Pathway activities cannot be computed for a one-layer network.')
+
         self.eval()
         res = self._run_batches(adata, 'act', lin_layer)
         return res
@@ -637,21 +658,22 @@ class scOntoVAE(nn.Module):
         if adata is not None:
             if '_ontovae' not in adata.uns.keys():
                 raise ValueError('Please run sconto_vae.module.utils.setup_anndata first.')
+            pdata = adata.copy()
         else:
-            adata = self.adata
+            pdata = self.adata.copy()
 
         # get indices of the genes in list
-        gindices = [self.adata.uns['_ontovae']['genes'].index(g) for g in genes]
+        gindices = [pdata.uns['_ontovae']['genes'].index(g) for g in genes]
 
         # replace their values
         for i in range(len(genes)):
-            adata.X[:,gindices[i]] = values[i]
+            pdata.X[:,gindices[i]] = values[i]
 
         # run perturbed data through network
         if output == 'act':
-            res = self._run_batches(adata, 'act', lin_layer)
+            res = self._run_batches(pdata, 'act', lin_layer)
         else:
-            res = self._run_batches(adata, retrieve='rec')
+            res = self._run_batches(pdata, retrieve='rec')
 
         return res
 

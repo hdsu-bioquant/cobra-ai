@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
 import json
+import os
+
 import numpy as np
 import pandas as pd
 import torch
@@ -304,6 +306,7 @@ class OntoVAEcpa(scOntoVAE):
                     adv_step: int,
                     optimizer_vae: optim.Optimizer, 
                     optimizer_adv: optim.Optimizer,
+                    pos_weights: bool, 
                     run=None):
         """
         Parameters
@@ -324,6 +327,8 @@ class OntoVAEcpa(scOntoVAE):
             optimizer for training the VAE
         optimizer_adv
             optimizer for training the adversarial component
+        pos_weights:
+            whether to make weights in decoder positive
         run
             Neptune run if training is to be logged
         """
@@ -372,8 +377,9 @@ class OntoVAEcpa(scOntoVAE):
             optimizer_vae.step()
 
             # make weights in Onto module positive
-            for i in range(self.start_point, len(self.decoder.decoder)):
-                self.decoder.decoder[i][0].weight.data = self.decoder.decoder[i][0].weight.data.clamp(0)
+            if pos_weights:
+                for i in range(self.start_point, len(self.decoder.decoder)):
+                    self.decoder.decoder[i][0].weight.data = self.decoder.decoder[i][0].weight.data.clamp(0)
 
             # adversarial training
             if i % adv_step == 0:
@@ -487,6 +493,7 @@ class OntoVAEcpa(scOntoVAE):
                     adv_step: int=1,
                     batch_size: int=128, 
                     optimizer: optim.Optimizer = optim.AdamW,
+                    pos_weights: bool = True,
                     epochs: int=300, 
                     run=None):
         """
@@ -516,11 +523,17 @@ class OntoVAEcpa(scOntoVAE):
             size of minibatches
         optimizer
             which optimizer to use
+        pos_weights
+            whether to make weights in decoder positive
         epochs
             over how many epochs to train
         run
             passed here if logging to Neptune should be carried out
         """
+
+        if os.path.isfile(modelpath + '/best_model.pt'):
+            print("A model already exists in the specified directory and will be overwritten.")
+
         # save train params
         train_params = {'train_size': train_size,
                         'seed': seed,
@@ -533,6 +546,7 @@ class OntoVAEcpa(scOntoVAE):
                         'adv_step': adv_step,
                         'batch_size': batch_size,
                         'optimizer': str(optimizer).split("'")[1],
+                        'pos_weights': pos_weights,
                         'epochs': epochs
                         }
         with open(modelpath + '/train_params.json', 'w') as fp:
@@ -584,7 +598,8 @@ class OntoVAEcpa(scOntoVAE):
                                                                                             mixup_lambda, 
                                                                                             adv_step, 
                                                                                             optimizer_vae, 
-                                                                                            optimizer_adv, 
+                                                                                            optimizer_adv,
+                                                                                            pos_weights, 
                                                                                             run)
             val_epoch_loss_vae, val_knn_purity = self.val_round(valloader, 
                                                                 kl_coeff, 
@@ -749,6 +764,9 @@ class OntoVAEcpa(scOntoVAE):
         lin_layer
             whether linear layer should be used for calculation
         """
+        if len(self.decoder.decoder) == 1:
+            raise ValueError('Pathway activities cannot be computed for a one-layer network.')
+        
         self.eval()
         res = self._run_batches(adata, retrieve='act', lin_layer=lin_layer)
         return res
