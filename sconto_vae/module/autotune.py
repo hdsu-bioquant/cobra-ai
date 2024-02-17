@@ -89,9 +89,8 @@ class ModelTuner:
         # The following for loop will provide all tunable parameters of the model class. 
         tunables = {}
         for child in getattr(self._model_cls, "_tunables", []):
-            
             for param, metadata in signature(child).parameters.items():
-            
+
                 if not isinstance(metadata.annotation, TunableMeta):
                         continue
            
@@ -158,6 +157,7 @@ class ModelTuner:
     def get_trainable(self,
                       adata,
                       ontobj,
+                      cpa_keys,
                       epochs,
                       resources,
                       ):
@@ -169,6 +169,7 @@ class ModelTuner:
                 model_cls,
                 adata,
                 ontobj,
+                cpa_keys,
                 max_epochs: int,
                     ):
             ''' This is a function, that can be wrapped by tune.with_parameters.'''
@@ -185,7 +186,7 @@ class ModelTuner:
                 elif type == "train":
                     train_kwargs[param] = value
 
-            utils.setup_anndata_ontovae(adata, ontobj)
+            utils.setup_anndata_ontovae(adata, ontobj, cpa_keys = cpa_keys)
                     
             # Creating a scOntoVAE model with the given adata and default values except for the tunable ones given by model_kwargs
             model = model_cls(adata, **model_kwargs)
@@ -198,6 +199,7 @@ class ModelTuner:
             model_cls = self._model_cls,
             adata = adata,
             ontobj = ontobj,
+            cpa_keys = cpa_keys,
             max_epochs = epochs,
         )
         return tune.with_resources(wrap_params, resources = resources)
@@ -208,6 +210,7 @@ class ModelTuner:
             ontobj,
             search_space,
             epochs = 10,
+            cpa_keys = None,
             metric = "validation_loss",
             scheduler = "asha",
             num_samples = 10,
@@ -227,6 +230,8 @@ class ModelTuner:
             hyperparameters can be viewed with :meth:`~scvi.autotune.ModelTuner.info`.
         epochs:
             Number of epochs to train each model configuration.
+        cpa_keys:
+            Observations to use for disentanglement of latent space (only for OntoVAE + cpa).
         metric:
             One of the metrics that is available for the underlying model class (check ModelTuner.info()).
             This metric is used to evaluate the quality of the values for hyperparameters that are tuned.
@@ -296,7 +301,7 @@ class ModelTuner:
             verbose = 1,
         )
 
-        trainable = self.get_trainable(adata, ontobj, epochs, resources)
+        trainable = self.get_trainable(adata, ontobj, cpa_keys, epochs, resources)
         tuner = tune.Tuner(
             trainable = trainable,
             param_space = search_space,
