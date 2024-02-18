@@ -315,4 +315,17 @@ class ModelTuner:
         }
 
         results = tuner.fit()
-        return results, config # to later get a good output of the result plus configurations        
+        self.output(results, config)
+        return results, config # to later get a good output of the result plus configurations  
+
+    def output(self, results, config):
+
+        print('Best result with', config['metrics'])
+
+        result = results.get_best_result()
+        params = result.config
+        loss = result.metrics[config['metrics']]
+
+        print('Parameter settings:', params)
+        print('Loss:', loss)
+            
