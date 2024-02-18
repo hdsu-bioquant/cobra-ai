@@ -194,6 +194,7 @@ class ModelTuner:
             # still need rest of train parameters, use default values except for the trainable parameters, which are given by search_space
             model.train_model(modelpath = "", save = False, epochs = max_epochs, **train_kwargs)
 
+
         wrap_params = tune.with_parameters(
             trainable,
             model_cls = self._model_cls,

@@ -20,7 +20,10 @@ from sconto_vae.module.modules import Classifier
 from sconto_vae.module.metrics import knn_purity
 from sconto_vae.module.utils import split_adata, FastTensorDataLoader
 
-
+# imports for autotuning
+from scvi._decorators import classproperty
+from sconto_vae.module.autotune import Tunable
+from ray import train
 
 """VAE with ontology in decoder"""
 
@@ -115,7 +118,7 @@ class OntoVAEcpa(scOntoVAE):
                  activation_fn_class: nn.Module = nn.ReLU,
                  bias_class: bool = True,
                  inject_covariates_class: bool = False,
-                 drop_class: float = 0.2,
+                 drop_class: Tunable[float] = 0.2,
                  average_neurons: bool = False,
                  **kwargs):
         super().__init__(adata, **kwargs)
@@ -482,9 +485,10 @@ class OntoVAEcpa(scOntoVAE):
 
     def train_model(self, 
                     modelpath: str, 
+                    save: bool = True,
                     train_size: float = 0.9,
                     seed: int = 42,
-                    lr_vae: float=1e-4, 
+                    lr_vae: Tunable[float]=1e-4, 
                     lr_adv: float=1e-4,
                     kl_coeff: float=1e-4, 
                     adv_coeff: float=1e3,
@@ -501,6 +505,8 @@ class OntoVAEcpa(scOntoVAE):
         ----------
         modelpath
             path to a folder where to store the params and the best model 
+        save
+            boolean value, if best model should be saved or not
         train_size
             which percentage of samples to use for training
         seed
@@ -531,36 +537,37 @@ class OntoVAEcpa(scOntoVAE):
             passed here if logging to Neptune should be carried out
         """
 
-        if os.path.isfile(modelpath + '/best_model.pt'):
-            print("A model already exists in the specified directory and will be overwritten.")
+        if save:
+            if os.path.isfile(modelpath + '/best_model.pt'):
+                print("A model already exists in the specified directory and will be overwritten.")
 
-        # save train params
-        train_params = {'train_size': train_size,
-                        'seed': seed,
-                        'lr_vae': lr_vae,
-                        'lr_adv': lr_adv,
-                        'kl_coeff': kl_coeff,
-                        'adv_coeff': adv_coeff,
-                        'pen_coeff': pen_coeff,
-                        'mixup_lambda': mixup_lambda,
-                        'adv_step': adv_step,
-                        'batch_size': batch_size,
-                        'optimizer': str(optimizer).split("'")[1],
-                        'pos_weights': pos_weights,
-                        'epochs': epochs
-                        }
-        with open(modelpath + '/train_params.json', 'w') as fp:
-            json.dump(train_params, fp, indent=4)
+            # save train params
+            train_params = {'train_size': train_size,
+                            'seed': seed,
+                            'lr_vae': lr_vae,
+                            'lr_adv': lr_adv,
+                            'kl_coeff': kl_coeff,
+                            'adv_coeff': adv_coeff,
+                            'pen_coeff': pen_coeff,
+                            'mixup_lambda': mixup_lambda,
+                            'adv_step': adv_step,
+                            'batch_size': batch_size,
+                            'optimizer': str(optimizer).split("'")[1],
+                            'pos_weights': pos_weights,
+                            'epochs': epochs
+                            }
+            with open(modelpath + '/train_params.json', 'w') as fp:
+                json.dump(train_params, fp, indent=4)
 
-        if run is not None:
-            run["train_parameters"] = train_params
+            if run is not None:
+                run["train_parameters"] = train_params
 
-        # save model params
-        with open(modelpath + '/model_params.json', 'w') as fp:
-            json.dump(self.params, fp, indent=4)
+            # save model params
+            with open(modelpath + '/model_params.json', 'w') as fp:
+                json.dump(self.params, fp, indent=4)
 
-        if run is not None:
-            run["model_parameters"] = self.params
+            if run is not None:
+                run["model_parameters"] = self.params
 
         # train-val split
         train_adata, val_adata = split_adata(self.adata, 
@@ -605,6 +612,7 @@ class OntoVAEcpa(scOntoVAE):
                                                                 kl_coeff, 
                                                                 adv_coeff,
                                                                 run)
+            train.report({"validation_loss": val_epoch_loss_vae})
             
             
             if run is not None:
@@ -614,7 +622,7 @@ class OntoVAEcpa(scOntoVAE):
                 run["metrics/val/loss_vae"].log(val_epoch_loss_vae)
                 run["metrics/val/knn_purity"].log(val_knn_purity)
                 
-            if val_epoch_loss_vae < val_loss_min:
+            if val_epoch_loss_vae < val_loss_min and save:
                 print('New best model!')
                 torch.save({
                     'epoch': epoch,
@@ -785,3 +793,12 @@ class OntoVAEcpa(scOntoVAE):
         self.eval()
         res = self._run_batches(adata, retrieve='rec')
         return res
+
+    @classproperty
+    def _tunables(cls):
+        return [cls.__init__, cls.train_model]
+    
+    @classproperty
+    def _metrics(cls):
+        ''' Maybe should provide the metric in the manner ["name", "mode"]'''
+        return ["validation_loss"]
