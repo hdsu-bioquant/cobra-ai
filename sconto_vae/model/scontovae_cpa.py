@@ -21,7 +21,7 @@ from sconto_vae.module.metrics import knn_purity
 from sconto_vae.module.utils import split_adata, FastTensorDataLoader
 
 # imports for autotuning
-from scvi._decorators import classproperty
+from sconto_vae.module.decorators import classproperty
 from sconto_vae.module.autotune import Tunable
 from ray import train
 
