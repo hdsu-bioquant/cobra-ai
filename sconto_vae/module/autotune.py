@@ -206,7 +206,7 @@ class ModelTuner:
         )
         return tune.with_resources(wrap_params, resources = resources)
 
-    def default_search_space(self, search_space = [], use_defaults = None):
+    def default_search_space(self, search_space = [], use_defaults = []):
         ''' Check if the parameters of the user defined search space are tunable, and if desired take default
         search space values. (User specified search spaces are prioritized.)
 
@@ -260,7 +260,7 @@ class ModelTuner:
             adata, 
             ontobj,
             search_space = [],
-            use_defaults = None,
+            use_defaults = [],
             epochs = 10,
             cpa_keys = None,
             metric = "validation_loss",
@@ -389,5 +389,8 @@ DEFAULTS = {
     'scOntoVAE': {
         "drop_enc": {"fn": "choice", "args": [[0.1, 0.2]]},
         "lr": {"fn": "loguniform", "args": [1e-4, 1e-2]}
+    },
+    'OntoVAEcpa': {
+        "lr_vae": {"fn": "loguniform", "args": [1e-4, 1e-2]}
     }
 }
