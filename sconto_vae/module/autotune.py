@@ -51,6 +51,8 @@ from ray import tune, air
 from datetime import datetime
 import os
 import warnings
+from torch import optim
+import torch.nn as nn
 
 import sconto_vae.module.utils as utils
 
@@ -387,8 +389,30 @@ class ModelTuner:
 
 DEFAULTS = {
     'scOntoVAE': {
-        "drop_enc": {"fn": "choice", "args": [[0.1, 0.2]]},
-        "lr": {"fn": "loguniform", "args": [1e-4, 1e-2]}
+        "use_batch_norm_enc": {"fn": "choice", "args": [[True, False]]},
+        "use_layer_norm_enc": {"fn": "choice", "args": [[True, False]]},
+        "use_activation_enc": {"fn": "choice", "args": [[True, False]]},
+        "activation_fn_enc": {"fn": "choice", "args": [[nn.ReLU]]},
+        "bias_enc": {"fn": "choice", "args": [[True, False]]},
+        "hidden_layers_enc": {"fn": "choice", "args": [[1, 2, 4, 8]]},
+        "inject_covariates_enc": {"fn": "choice", "args": [[True, False]]},
+        "drop_enc": {"fn": "uniform", "args": [0.1, 0.4]},
+        "z_drop": {"fn": "uniform", "args": [0.5, 0.8]},
+        "root_layer_latent": {"fn": "choice", "args": [[True, False]]},
+        "neuronnum": {"fn": "choice", "args": [[3, 4, 5]]},
+        "use_batch_norm_dec": {"fn": "choice", "args": [[True, False]]},
+        "use_layer_norm_dec": {"fn": "choice", "args": [[True, False]]},
+        "use_activation_dec": {"fn": "choice", "args": [[True, False]]},
+        "use_activation_lat": {"fn": "choice", "args": [[True, False]]},
+        "activation_fn_dec": {"fn": "choice", "args": [[nn.Tanh]]},
+        "bias_dec": {"fn": "choice", "args": [[True, False]]},
+        "inject_covariates_dec": {"fn": "choice", "args": [[True, False]]},
+        "drop_dec": {"fn": "uniform", "args": [0, 0.4]},
+        "lr": {"fn": "loguniform", "args": [1e-4, 1e-2]},
+        "kl_coeff": {"fn": "loguniform", "args": [1e-4, 1e-2]},
+        "batch_size": {"fn": "choice", "args": [[32, 64, 128, 256]]},
+        "pos_weights": {"fn": "choice", "args": [[True, False]]},
+        "optimizer": {"fn": "choice", "args": [[optim.AdamW, optim.SGD]]}
     },
     'OntoVAEcpa': {
         "lr_vae": {"fn": "loguniform", "args": [1e-4, 1e-2]}
