@@ -50,6 +50,7 @@ from inspect import signature, Parameter
 from ray import tune, air
 from datetime import datetime
 import os
+import warnings
 
 import sconto_vae.module.utils as utils
 
@@ -205,11 +206,61 @@ class ModelTuner:
         )
         return tune.with_resources(wrap_params, resources = resources)
 
+    def default_search_space(self, search_space = [], use_defaults = None):
+        ''' Check if the parameters of the user defined search space are tunable, and if desired take default
+        search space values. (User specified search spaces are prioritized.)
+
+        Parameters
+        ----------
+        search_space:
+            Dictionary of hyperparameter names and their respective search spaces
+            provided as instantiated Ray Tune sample functions. Available
+            hyperparameters can be viewed with :meth:`~scvi.autotune.ModelTuner.info`.
+            The default is an empty list, in case that the hyperparameters to be tuned
+            should all get the search space from the DEFAULT space.
+        use_defaults:
+            A list of strings, containing the names of the hyperparameters that are
+            supposed to be tuned with the DEFAULTS search space.
+
+        Returns
+        -------
+            The search space composed of the user specified search space and the DEFAULTS
+            search space of the user specified hyperparameters.
+        '''
+        for param in search_space:
+            if param in self.get_tunables():
+                continue
+            raise ValueError(
+                f"Provided parameter `{param}` is invalid for {self._model_cls.__name__}."
+                " Please see available parameters with `ModelTuner.info()`. "
+            )
+        for param in use_defaults:
+            if param in self.get_tunables():
+                continue
+            warnings.warn(
+                f"Provided parameter `{param}` is invalid for {self._model_cls.__name__}."
+                " Please see available parameters with `ModelTuner.info()`. ",
+                UserWarning
+            )
+        
+        _search_space = {}
+        if use_defaults != None:
+            defaults = DEFAULTS.get(self._model_cls.__name__, {})
+            for param, metadata in defaults.items():
+                if param in use_defaults:
+                    sample_fn = getattr(tune, metadata["fn"])
+                    fn_args = metadata.get("args", [])
+                    fn_kwargs = metadata.get("kwargs", {})
+                    _search_space[param] = sample_fn(*fn_args, **fn_kwargs)
+
+        _search_space.update(search_space)
+        return _search_space
 
     def fit(self, 
             adata, 
             ontobj,
-            search_space,
+            search_space = [],
+            use_defaults = None,
             epochs = 10,
             cpa_keys = None,
             metric = "validation_loss",
@@ -229,6 +280,9 @@ class ModelTuner:
             Dictionary of hyperparameter names and their respective search spaces
             provided as instantiated Ray Tune sample functions. Available
             hyperparameters can be viewed with :meth:`~scvi.autotune.ModelTuner.info`.
+        use_defaults:
+            A list of strings, containing the names of the hyperparameters that are
+            supposed to be tuned with the DEFAULTS search space.
         epochs:
             Number of epochs to train each model configuration.
         cpa_keys:
@@ -287,7 +341,8 @@ class ModelTuner:
         experiment_name = "tune_" + self._model_cls.__name__.lower() + "_" + datetime.now().strftime("%Y-%m-%d-%H:%M:%S")
         logging_dir = os.path.join(os.getcwd(), "ray")
         metrics = self.get_metric()
-        param_keys = list(search_space.keys())
+        _search_space = self.default_search_space(search_space, use_defaults)
+        param_keys = list(_search_space.keys())
         kwargs = {"metric_columns": list(metrics.keys()),
                   "parameter_columns": param_keys,
                   "metric": metric,
@@ -305,13 +360,13 @@ class ModelTuner:
         trainable = self.get_trainable(adata, ontobj, cpa_keys, epochs, resources)
         tuner = tune.Tuner(
             trainable = trainable,
-            param_space = search_space,
+            param_space = _search_space,
             tune_config = tune_config,
             run_config = run_config,
         )
         config = {
             "metrics": metric,
-            "search_space": search_space
+            "search_space": _search_space
         }
 
         results = tuner.fit()
@@ -329,3 +384,10 @@ class ModelTuner:
         print('Parameter settings:', params)
         print('Loss:', loss)
             
+
+DEFAULTS = {
+    'scOntoVAE': {
+        "drop_enc": {"fn": "choice", "args": [[0.1, 0.2]]},
+        "lr": {"fn": "loguniform", "args": [1e-4, 1e-2]}
+    }
+}
