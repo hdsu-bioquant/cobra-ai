@@ -415,6 +415,25 @@ DEFAULTS = {
         "optimizer": {"fn": "choice", "args": [[optim.AdamW, optim.SGD]]}
     },
     'OntoVAEcpa': {
-        "lr_vae": {"fn": "loguniform", "args": [1e-4, 1e-2]}
+        "hidden_layers_class": {"fn": "choice", "args": [[1, 2, 4, 8]]},
+        "neurons_per_class_layer": {"fn": "choice", "args": [[16, 32, 46, 128]]},
+        "use_batch_norm_class": {"fn": "choice", "args": [[True, False]]},
+        "use_layer_norm_class": {"fn": "choice", "args": [[True, False]]},
+        "use_activation_class": {"fn": "choice", "args": [[True, False]]},
+        "activation_fn_class": {"fn": "choice", "args": [[nn.ReLU]]},
+        "bias_class": {"fn": "choice", "args": [[True, False]]},
+        "inject_covariates_class": {"fn": "choice", "args": [[True, False]]},
+        "drop_class": {"fn": "uniform", "args": [0.1, 0.4]},
+        "average_neurons": {"fn": "choice", "args": [[True, False]]},
+        "lr_vae": {"fn": "loguniform", "args": [1e-4, 1e-2]},
+        "lr_adv": {"fn": "loguniform", "args": [1e-4, 1e-2]},
+        "kl_coeff": {"fn": "loguniform", "args": [1e-4, 1e-2]},
+        "adv_coeff": {"fn": "loguniform", "args": [1e2, 1e4]},
+        "pen_coeff": {"fn": "uniform", "args": [0, 4]},
+        "mixup_lambda": {"fn": "choice", "args": [[0.0, 1.0, 2.0]]},
+        "adv_step": {"fn": "choice", "args": [[0, 1, 2]]},
+        "batch_size": {"fn": "choice", "args": [[32, 64, 128, 256]]},
+        "pos_weights": {"fn": "choice", "args": [[True, False]]},
+        "optimizer": {"fn": "choice", "args": [[optim.AdamW, optim.SGD]]}
     }
 }
