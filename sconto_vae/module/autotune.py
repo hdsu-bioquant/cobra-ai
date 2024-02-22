@@ -163,6 +163,8 @@ class ModelTuner:
                       cpa_keys,
                       epochs,
                       resources,
+                      top_thresh: int=1000,
+                      bottom_thresh: int=30
                       ):
         """Returns a trainable function consumable by :class:`~ray.tune.Tuner`."""
 
@@ -172,6 +174,8 @@ class ModelTuner:
                 model_cls,
                 adata,
                 ontobj,
+                top_thresh,
+                bottom_thresh,
                 cpa_keys,
                 max_epochs: int,
                     ):
@@ -189,7 +193,7 @@ class ModelTuner:
                 elif type == "train":
                     train_kwargs[param] = value
 
-            utils.setup_anndata_ontovae(adata, ontobj, cpa_keys = cpa_keys)
+            utils.setup_anndata_ontovae(adata, ontobj, top_thresh=top_thresh, bottom_thresh=bottom_thresh, cpa_keys = cpa_keys)
                     
             # Creating a scOntoVAE model with the given adata and default values except for the tunable ones given by model_kwargs
             model = model_cls(adata, **model_kwargs)
@@ -203,6 +207,8 @@ class ModelTuner:
             model_cls = self._model_cls,
             adata = adata,
             ontobj = ontobj,
+            top_thresh=top_thresh,
+            bottom_thresh=bottom_thresh,
             cpa_keys = cpa_keys,
             max_epochs = epochs,
         )
@@ -261,6 +267,8 @@ class ModelTuner:
     def fit(self, 
             adata, 
             ontobj,
+            top_thresh: int=1000,
+            bottom_thresh: int=30,
             search_space = [],
             use_defaults = [],
             epochs = 10,
@@ -359,7 +367,7 @@ class ModelTuner:
             verbose = 1,
         )
 
-        trainable = self.get_trainable(adata, ontobj, cpa_keys, epochs, resources)
+        trainable = self.get_trainable(adata, ontobj, top_thresh, bottom_thresh, cpa_keys, epochs, resources)
         tuner = tune.Tuner(
             trainable = trainable,
             param_space = _search_space,
