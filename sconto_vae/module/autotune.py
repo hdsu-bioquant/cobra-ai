@@ -402,7 +402,7 @@ DEFAULTS = {
         "use_activation_enc": {"fn": "choice", "args": [[True, False]]},
         "activation_fn_enc": {"fn": "choice", "args": [[nn.ReLU]]},
         "bias_enc": {"fn": "choice", "args": [[True, False]]},
-        "hidden_layers_enc": {"fn": "choice", "args": [[1, 2, 4, 8]]},
+        "hidden_layers_enc": {"fn": "choice", "args": [[1, 2, 3, 4]]},
         "inject_covariates_enc": {"fn": "choice", "args": [[True, False]]},
         "drop_enc": {"fn": "uniform", "args": [0.1, 0.4]},
         "z_drop": {"fn": "uniform", "args": [0.5, 0.8]},
@@ -412,7 +412,7 @@ DEFAULTS = {
         "use_layer_norm_dec": {"fn": "choice", "args": [[True, False]]},
         "use_activation_dec": {"fn": "choice", "args": [[True, False]]},
         "use_activation_lat": {"fn": "choice", "args": [[True, False]]},
-        "activation_fn_dec": {"fn": "choice", "args": [[nn.Tanh]]},
+        "activation_fn_dec": {"fn": "choice", "args": [[nn.Tanh, nn.Sigmoid]]},
         "bias_dec": {"fn": "choice", "args": [[True, False]]},
         "inject_covariates_dec": {"fn": "choice", "args": [[True, False]]},
         "drop_dec": {"fn": "uniform", "args": [0, 0.4]},
@@ -420,11 +420,11 @@ DEFAULTS = {
         "kl_coeff": {"fn": "loguniform", "args": [1e-4, 1e-2]},
         "batch_size": {"fn": "choice", "args": [[32, 64, 128, 256]]},
         "pos_weights": {"fn": "choice", "args": [[True, False]]},
-        "optimizer": {"fn": "choice", "args": [[optim.AdamW, optim.SGD]]}
+        "optimizer": {"fn": "choice", "args": [[optim.AdamW, optim.Adam, optim.SGD]]}
     },
     'OntoVAEcpa': {
-        "hidden_layers_class": {"fn": "choice", "args": [[1, 2, 4, 8]]},
-        "neurons_per_class_layer": {"fn": "choice", "args": [[16, 32, 46, 128]]},
+        "hidden_layers_class": {"fn": "choice", "args": [[1, 2, 3, 4]]},
+        "neurons_per_class_layer": {"fn": "choice", "args": [[16, 32, 64, 128]]},
         "use_batch_norm_class": {"fn": "choice", "args": [[True, False]]},
         "use_layer_norm_class": {"fn": "choice", "args": [[True, False]]},
         "use_activation_class": {"fn": "choice", "args": [[True, False]]},
@@ -438,10 +438,10 @@ DEFAULTS = {
         "kl_coeff": {"fn": "loguniform", "args": [1e-4, 1e-2]},
         "adv_coeff": {"fn": "loguniform", "args": [1e2, 1e4]},
         "pen_coeff": {"fn": "uniform", "args": [0, 4]},
-        "mixup_lambda": {"fn": "choice", "args": [[0.0, 1.0, 2.0]]},
-        "adv_step": {"fn": "choice", "args": [[0, 1, 2]]},
+        "mixup_lambda": {"fn": "uniform", "args": [0.1, 1.0]},
+        "adv_step": {"fn": "choice", "args": [[1, 2, 3]]},
         "batch_size": {"fn": "choice", "args": [[32, 64, 128, 256]]},
         "pos_weights": {"fn": "choice", "args": [[True, False]]},
-        "optimizer": {"fn": "choice", "args": [[optim.AdamW, optim.SGD]]}
+        "optimizer": {"fn": "choice", "args": [[optim.AdamW, optim.Adam, optim.SGD]]}
     }
 }
