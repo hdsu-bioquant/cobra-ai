@@ -636,7 +636,7 @@ class scOntoVAE(nn.Module):
         return res
     
     @torch.no_grad()
-    def perturbation(self, adata: AnnData=None, genes: list=[], values: list=[], output=Literal['act','rec'], lin_layer=True):
+    def perturbation(self, adata: AnnData=None, genes: list=[], values: list=[], output=Literal['latent','act','rec'], lin_layer=True):
         """
         Retrieves pathway activities or reconstructed gene values after performing in silico perturbation.
 
@@ -649,7 +649,7 @@ class scOntoVAE(nn.Module):
         values
             list with new values, same length as genes
         output
-            whether to retrieve pathway activities ('act') or reconstructed gene values ('rec')
+            whether to retrieve latent space ('latent'), pathway activities ('act') or reconstructed gene values ('rec')
         lin_layer
             whether linear layer should be used for pathway activity retrieval
         """
@@ -670,7 +670,9 @@ class scOntoVAE(nn.Module):
             pdata.X[:,gindices[i]] = values[i]
 
         # run perturbed data through network
-        if output == 'act':
+        if output == 'latent':
+            res = self._run_batches(pdata, 'latent')
+        elif output == 'act':
             res = self._run_batches(pdata, 'act', lin_layer)
         else:
             res = self._run_batches(pdata, retrieve='rec')
