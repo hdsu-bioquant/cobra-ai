@@ -367,7 +367,7 @@ class ModelTuner:
             verbose = 1,
         )
 
-        trainable = self.get_trainable(adata, ontobj, top_thresh, bottom_thresh, cpa_keys, epochs, resources)
+        trainable = self.get_trainable(adata, ontobj, cpa_keys, epochs, resources, top_thresh, bottom_thresh)
         tuner = tune.Tuner(
             trainable = trainable,
             param_space = _search_space,
