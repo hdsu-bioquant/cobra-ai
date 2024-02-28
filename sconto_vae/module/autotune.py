@@ -121,6 +121,38 @@ class ModelTuner:
                     "source": self._model_cls.__name__,
                 }
         
+        if self._model_cls.__base__ != "object":
+
+            for child in getattr(self._model_cls.__base__, "_tunables", []):    
+                for param, metadata in signature(child).parameters.items():
+                    
+                    if not metadata.annotation.__name__ == 'Tunable_':
+                        continue
+                        
+                    default_val = None
+                    if metadata.default is not Parameter.empty:
+                        default_val = metadata.default
+
+                    annotation = metadata.annotation.__args__[0]
+                    if hasattr(annotation, "__args__"):
+                        annotation = annotation.__args
+                    else:
+                        annotation = annotation.__name__
+
+                    if child.__name__ == "__init__":
+                        tunable_type = "model"
+                    elif "train" in child.__name__:
+                        tunable_type = "train"
+                    else:
+                        tunable_type = None
+
+                    tunables[param] = {
+                        "tunable_type": tunable_type,
+                        "default_value": default_val,
+                        "annotation": annotation,
+                        "source": self._model_cls.__base__.__name__,
+                    }
+
         return tunables
 
     def get_metric(self):
@@ -260,6 +292,15 @@ class ModelTuner:
                     fn_args = metadata.get("args", [])
                     fn_kwargs = metadata.get("kwargs", {})
                     _search_space[param] = sample_fn(*fn_args, **fn_kwargs)
+
+            if self._model_cls.__base__ != "object":
+                defaults = DEFAULTS.get(self._model_cls.__base__.__name__, {})
+                for param, metadata in defaults.items():
+                    if param in use_defaults:
+                        sample_fn = getattr(tune, metadata["fn"])
+                        fn_args = metadata.get("args", [])
+                        fn_kwargs = metadata.get("kwargs", {})
+                        _search_space[param] = sample_fn(*fn_args, **fn_kwargs)
 
         _search_space.update(search_space)
         return _search_space
