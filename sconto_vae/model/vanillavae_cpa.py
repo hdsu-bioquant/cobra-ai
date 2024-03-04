@@ -662,7 +662,7 @@ class vanillaCPA(vanillaVAE):
             adata = self.adata
 
         batch = self._cov_tensor(adata)
-        covs = self._cov_tensor(adata)
+        covs = torch.tensor(adata.obsm['_cpa_categorical_covs'].to_numpy())
 
         dataloader = FastTensorDataLoader(adata.X, 
                                           batch,
