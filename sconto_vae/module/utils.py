@@ -28,7 +28,9 @@ def setup_anndata_ontovae(adata: AnnData,
                 categorical_covariate_keys: Optional[list[str]] = None,
                 class_key: Optional[str] = None,
                 cpa_keys: Optional[list[str]] = None, 
-                layer: Optional[str] = None):
+                layer: Optional[str] = None,
+                combination: Optional[bool]=False,
+                comb_feature: Optional[str]=None):
     
     """
     Matches the dataset to the ontology and creates OntoVAE fields.
@@ -120,7 +122,16 @@ def setup_anndata_ontovae(adata: AnnData,
         ndata.obs['_ontovae_class'] = pd.factorize(ndata.obs.loc[:,class_key])[0]
     
     if cpa_keys is not None:
-         ndata.obsm['_cpa_categorical_covs'] = ndata.obs.loc[:,cpa_keys].apply(lambda x: pd.factorize(x)[0])
+      if combination:
+            treatment_dic =  dict((i, e) for i, e in enumerate(ndata.obs[comb_feature].unique()))
+            treatment_dic = {value: key for key, value in treatment_dic.items()}
+            df_encoded = ndata.obs.loc[:,cpa_keys].apply(lambda x: pd.factorize(x)[0])
+            treatment_encode = ndata.obs.loc[:,cpa_keys].replace({"orig_ident_new":treatment_dic})["orig_ident_new"].values #> 
+            df_encoded["orig_ident_new"] = treatment_encode #> 
+            df_encoded = df_encoded.rename(columns={"orig_ident_new": comb_feature})
+            ndata.obsm['_cpa_categorical_covs'] = df_encoded
+      else:
+            ndata.obsm['_cpa_categorical_covs'] = ndata.obs.loc[:,cpa_keys].apply(lambda x: pd.factorize(x)[0])
     
     return ndata
 
