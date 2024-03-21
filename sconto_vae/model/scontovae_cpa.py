@@ -794,6 +794,79 @@ class OntoVAEcpa(scOntoVAE):
         res = self._run_batches(adata, retrieve='rec')
         return res
 
+    @torch.no_grad()
+    def decode(self, adata: AnnData, embedding: np.array, retrieve: Literal['act', 'rec'], lin_layer=True): 
+        """
+        Passes a user-defined embedding through the decoder.
+
+        Parameters:
+        ----------
+        adata: An AnnData object processed with setup_anndata_ontovae
+        embedding: An embedding (z) from the latent space
+        lin_layer: whether hooks should be attached to linear layer of the model
+        retrieve: 'act' for pathway activity; 'rec' for reconstructions
+        
+        Returns:
+        ----------
+        Pathway activity or reconstruction
+        """
+
+        # set to eval mode
+        self.eval()
+        
+        if adata is not None:
+            if '_ontovae' not in adata.uns.keys():
+                raise ValueError('Please run sconto_vae.module.utils.setup_anndata first.')
+        else:
+            adata = self.adata 
+        
+        batch = self._cov_tensor(adata)
+        
+        embedding = torch.tensor(embedding, dtype=torch.float32)
+        dataloader = FastTensorDataLoader(embedding, 
+                                        batch,
+                                        batch_size=128, 
+                                        shuffle=False)
+        # pass forward the different z's
+        if retrieve == 'act':
+            
+            res = []
+            for minibatch in dataloader:
+                self.eval()
+                z = minibatch[0].to(self.device)
+                cat_list = torch.split(minibatch[1].T.to(self.device), 1)
+                
+                activation = {}
+                hooks = {}
+                self._attach_hooks(lin_layer=lin_layer, activation=activation, hooks=hooks)
+                
+                reconstruction = self.decoder(z, cat_list)
+                
+                act = torch.cat(list(activation.values()), dim=1)
+                for h in hooks:
+                    hooks[h].remove()
+            
+                result_avg = self._average_neuronnum(act.to('cpu').detach().numpy())
+                res.append(result_avg)
+            res_out = np.vstack([r for r in res])
+        else:
+            res = []
+            for minibatch in dataloader:
+                self.eval()
+                z = torch.tensor(minibatch[0], dtype=torch.float32).to(self.device)
+                cat_list = torch.split(minibatch[1].T.to(self.device), 1)
+                
+                activation = {}
+                hooks = {}
+                self._attach_hooks(lin_layer=lin_layer, activation=activation, hooks=hooks)
+                
+                reconstruction = self.decoder(z, cat_list)
+                res.append(reconstruction)
+            res_out = np.vstack([r for r in res])
+                
+                
+        return res_out
+
     @classproperty
     def _tunables(cls):
         return [cls.__init__, cls.train_model]
