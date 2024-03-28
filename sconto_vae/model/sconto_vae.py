@@ -238,12 +238,8 @@ class scOntoVAE(nn.Module):
         eps = torch.randn_like(sigma) 
         z = mu + eps * sigma
         if self.z_drop > 0:
-            print("before")
-            print(z)
             if mode == "train":
                 z = nn.Dropout(p=self.z_drop)(z)
-            print("after")
-            print(z)
         return z
         
     def _get_embedding(self, x: torch.tensor, cat_list: Iterable[torch.tensor], mode):
