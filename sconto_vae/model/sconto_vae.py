@@ -175,6 +175,8 @@ class scOntoVAE(nn.Module):
         if self.covs is not None:
             self.n_cat_list.extend([len(self.covs[c].unique()) for c in self.covs.columns])
 
+        self.rec_weights = None
+
         # Encoder
         self.encoder = Encoder(in_features = self.in_features,
                                 latent_dim = self.latent_dim,
@@ -274,7 +276,10 @@ class scOntoVAE(nn.Module):
         Calculates VAE loss as combination of reconstruction loss and weighted Kullback-Leibler loss.
         """
         kl_loss = -0.5 * torch.sum(1. + log_var - mu.pow(2) - log_var.exp(), )
-        rec_loss = F.mse_loss(reconstruction, data, reduction="sum")
+        if self.rec_weights is not None:
+            rec_loss = torch.sum(torch.matmul(input=(data - reconstruction)**2, other=self.rec_weights))
+        else:
+            rec_loss = F.mse_loss(reconstruction, data, reduction="sum")
         if run is not None:
             run["metrics/" + mode + "/kl_loss"].log(kl_loss)
             run["metrics/" + mode + "/rec_loss"].log(rec_loss)
@@ -383,6 +388,7 @@ class scOntoVAE(nn.Module):
                     batch_size: Tunable[int]=128, 
                     optimizer: Tunable[optim.Optimizer] = optim.AdamW,
                     pos_weights: Tunable[bool] = True,
+                    use_rec_weights: bool = False,
                     epochs: int=300, 
                     run=None):
         """
@@ -424,6 +430,7 @@ class scOntoVAE(nn.Module):
                             'batch_size': batch_size,
                             'optimizer': str(optimizer).split("'")[1],
                             'pos_weights': pos_weights,
+                            'use_rec_weights': use_rec_weights,
                             'epochs': epochs
                             }
             with open(modelpath + '/train_params.json', 'w') as fp:
@@ -456,6 +463,13 @@ class scOntoVAE(nn.Module):
                                          val_covs,
                                         batch_size=batch_size, 
                                         shuffle=False)
+        
+        # compute reconstruction weights
+        if use_rec_weights:
+            weights = torch.tensor(np.var(np.array(self.adata.X.todense()), axis=0), dtype=torch.float32)
+            self.rec_weights = torch.mul(weights, torch.div(weights[weights != 0].size(dim=0), torch.sum(weights,))).to(self.device)
+        else:
+            self.rec_weights = None
 
         val_loss_min = float('inf')
         optimizer = optimizer(self.parameters(), lr = lr)

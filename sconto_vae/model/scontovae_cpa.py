@@ -408,7 +408,8 @@ class OntoVAEcpa(scOntoVAE):
             for i, vals in enumerate(cov_list):
                 cov = list(self.cov_dict.keys())[i]
                 cov_purity.append(knn_purity(z_basal.to('cpu').detach().numpy(), vals.long().squeeze().to('cpu').detach().numpy()))
-            purity += np.mean(cov_purity)
+                cov_purity.append(-knn_purity(z_dict['z_' + cov].to('cpu').detach().numpy(), vals.long().squeeze().to('cpu').detach().numpy()))
+            purity += np.sum(cov_purity)
 
         # compute avg training loss
         train_loss_vae = running_loss_vae/len(dataloader)
@@ -473,7 +474,8 @@ class OntoVAEcpa(scOntoVAE):
             for i, vals in enumerate(cov_list):
                 cov = list(self.cov_dict.keys())[i]
                 cov_purity.append(knn_purity(z_basal.to('cpu').detach().numpy(), vals.long().squeeze().to('cpu').detach().numpy()))
-            purity += np.mean(cov_purity)
+                cov_purity.append(-knn_purity(z_dict['z_' + cov].to('cpu').detach().numpy(), vals.long().squeeze().to('cpu').detach().numpy()))
+            purity += np.sum(cov_purity)
 
         # compute avg training loss
         val_loss_vae = running_loss_vae/len(dataloader)
@@ -498,6 +500,7 @@ class OntoVAEcpa(scOntoVAE):
                     batch_size: Tunable[int]=128, 
                     optimizer: Tunable[optim.Optimizer] = optim.AdamW,
                     pos_weights: Tunable[bool] = True,
+                    use_rec_weights: bool = False,
                     epochs: int=300, 
                     run=None):
         """
@@ -554,6 +557,7 @@ class OntoVAEcpa(scOntoVAE):
                             'batch_size': batch_size,
                             'optimizer': str(optimizer).split("'")[1],
                             'pos_weights': pos_weights,
+                            'use_rec_weights': use_rec_weights,
                             'epochs': epochs
                             }
             with open(modelpath + '/train_params.json', 'w') as fp:
@@ -592,7 +596,15 @@ class OntoVAEcpa(scOntoVAE):
                                         batch_size=batch_size, 
                                         shuffle=False)
 
+        # compute reconstruction weights
+        if use_rec_weights:
+            weights = torch.tensor(np.var(np.array(self.adata.X.todense()), axis=0), dtype=torch.float32)
+            self.rec_weights = torch.mul(weights, torch.div(weights[weights != 0].size(dim=0), torch.sum(weights,))).to(self.device)
+        else:
+            self.rec_weights = None
+
         val_loss_min = float('inf')
+        val_purity_min = float('inf')
         optimizer_vae = optimizer(list(self.encoder.parameters()) + list(self.decoder.parameters()) + list(self.covars_embeddings.parameters()), lr = lr_vae)
         optimizer_adv = optimizer(self.covars_classifiers.parameters(), lr = lr_adv)
 
