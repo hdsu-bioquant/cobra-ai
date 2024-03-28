@@ -174,7 +174,7 @@ class OntoVAEcpa(scOntoVAE):
 
         self.to(self.device)
 
-    def _get_embedding(self, x: torch.tensor, cat_list: Iterable[torch.tensor], cov_list: Iterable[torch.tensor], mixup_lambda=1):
+    def _get_embedding(self, x: torch.tensor, cat_list: Iterable[torch.tensor], cov_list: Iterable[torch.tensor], mode, mixup_lambda=1):
         """
         Generates latent space embedding.
 
@@ -203,16 +203,19 @@ class OntoVAEcpa(scOntoVAE):
         mu, log_var = self.encoder(x, cat_list)
             
         # sample from latent space
-        z_basal = self.reparameterize(mu, log_var)
+        z_basal = self.reparameterize(mu, log_var, mode)
+        z_mask = torch.where(z_basal == 0)
         if self.use_activation_lat and self.use_activation_dec:
             z_basal = self.activation_fn_dec()(z_basal)
 
         # covariate encoding
         covars_embeddings = {}
         for i, key in enumerate(self.covars_embeddings.keys()):
-            cov_embed = self.covars_embeddings[key](cov_list[i].long().squeeze())
-            cov_mix_embed = self.covars_embeddings[key](cov_list[i].long().squeeze()[index])
-            covars_embeddings[key] = mixup_lambda * cov_embed + (1. - mixup_lambda) * cov_mix_embed
+            x = self.covars_embeddings[key](cov_list[i].long().squeeze())
+            x_mix = self.covars_embeddings[key](cov_list[i].long().squeeze()[index])
+            x_new = mixup_lambda * x + (1. - mixup_lambda) * x_mix
+            x_new[z_mask] = 0
+            covars_embeddings[key] = x_new
 
         # create different z's
         z_cov = {}
@@ -226,7 +229,7 @@ class OntoVAEcpa(scOntoVAE):
 
         return z_dict, mu, log_var
   
-    def forward(self, x: torch.tensor, cat_list: Iterable[torch.tensor], cov_list: Iterable[torch.tensor], mixup_lambda: float):
+    def forward(self, x: torch.tensor, cat_list: Iterable[torch.tensor], cov_list: Iterable[torch.tensor], mixup_lambda: float, mode):
         """
         Forward computation on minibatch of samples.
         
@@ -244,7 +247,7 @@ class OntoVAEcpa(scOntoVAE):
             coefficient for adversarial training
         """
         # inference
-        zdict, mu, log_var = self._get_embedding(x, cat_list, cov_list, mixup_lambda)
+        zdict, mu, log_var = self._get_embedding(x, cat_list, cov_list, mode, mixup_lambda)
 
         # decoding
         reconstruction = self.decoder(zdict['z_total'], cat_list)
@@ -357,7 +360,7 @@ class OntoVAEcpa(scOntoVAE):
             optimizer_vae.zero_grad()
 
             # forward step generator
-            z_dict, mu, logvar, reconstruction = self.forward(data, cat_list, cov_list, mixup_lambda)
+            z_dict, mu, logvar, reconstruction = self.forward(data, cat_list, cov_list, mixup_lambda, mode='train')
             z_basal = z_dict["z_basal"]
             covars_pred = self.adv_forward(z_basal, cat_list)
             vae_loss = self.vae_loss(reconstruction, mu, logvar, data, kl_coeff, mode='train', run=run)
@@ -457,7 +460,7 @@ class OntoVAEcpa(scOntoVAE):
             cov_list = torch.split(minibatch[2].T.to(self.device), 1)
 
             # forward step generator
-            z_dict, mu, logvar, reconstruction = self.forward(data, cat_list, cov_list, mixup_lambda=1)
+            z_dict, mu, logvar, reconstruction = self.forward(data, cat_list, cov_list, mixup_lambda=1, mode='val')
             z_basal = z_dict["z_basal"]
             covars_pred = self.adv_forward(z_basal, cat_list)
             vae_loss = self.vae_loss(reconstruction, mu, logvar, data, kl_coeff, mode='val', run=run)
@@ -672,7 +675,7 @@ class OntoVAEcpa(scOntoVAE):
         self.eval()
 
         # get latent space embedding dict
-        zdict, _, _ = self._get_embedding(x, cat_list, cov_list)
+        zdict, _, _ = self._get_embedding(x, cat_list, cov_list, mode='val')
         dict_keys = list(zdict.keys())
 
         # pass forward the different z's
@@ -736,7 +739,7 @@ class OntoVAEcpa(scOntoVAE):
             cat_list = torch.split(minibatch[1].T.to(self.device), 1)
             cov_list = torch.split(minibatch[2].T.to(self.device), 1)
             if retrieve == 'latent':
-                result, _, _ = self._get_embedding(x, cat_list, cov_list)
+                result, _, _ = self._get_embedding(x, cat_list, cov_list, mode="val")
                 if self.root_layer_latent:
                     result_avg = {k: self._average_neuronnum(v.to('cpu').detach().numpy()) for k, v in result.items()}
                 else:

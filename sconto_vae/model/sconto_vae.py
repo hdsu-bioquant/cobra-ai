@@ -157,6 +157,7 @@ class scOntoVAE(nn.Module):
         self.start_point = 0 if self.root_layer_latent else 1
         self.latent_dim = self.layer_dims_dec[0] * neuronnum if self.root_layer_latent else latent_dim
         self.neurons_per_layer_enc = self.latent_dim
+        self.z_drop = z_drop
 
         # additional info
         self.neuronnum = neuronnum
@@ -189,8 +190,7 @@ class scOntoVAE(nn.Module):
                                 activation_fn = activation_fn_enc,
                                 bias = bias_enc,
                                 inject_covariates = inject_covariates_enc,
-                                drop = drop_enc,
-                                z_drop = z_drop)
+                                drop = drop_enc)
 
         # Decoder
         self.decoder = OntoDecoder(in_features = self.in_features,
@@ -220,7 +220,7 @@ class scOntoVAE(nn.Module):
             covs = pd.concat([covs, adata.obsm['_ontovae_categorical_covs']], axis=1)
         return torch.tensor(np.array(covs))
 
-    def reparameterize(self, mu, log_var):
+    def reparameterize(self, mu, log_var, mode='train'):
         """
         Performs the reparameterization trick.
 
@@ -230,12 +230,23 @@ class scOntoVAE(nn.Module):
             mean from the encoder's latent space
         log_var
             log variance from the encoder's latent space
+        mode
+            train: training mode
+            val: validation mode
         """
         sigma = torch.exp(0.5*log_var) 
         eps = torch.randn_like(sigma) 
-        return mu + eps * sigma
+        z = mu + eps * sigma
+        if self.z_drop > 0:
+            print("before")
+            print(z)
+            if mode == "train":
+                z = nn.Dropout(p=self.z_drop)(z)
+            print("after")
+            print(z)
+        return z
         
-    def _get_embedding(self, x: torch.tensor, cat_list: Iterable[torch.tensor]):
+    def _get_embedding(self, x: torch.tensor, cat_list: Iterable[torch.tensor], mode):
         """
         Generates latent space embedding.
 
@@ -248,13 +259,13 @@ class scOntoVAE(nn.Module):
             shape of each tensor is (minibatch, 1)
         """
         mu, log_var = self.encoder(x, cat_list)
-        z = self.reparameterize(mu, log_var)
+        z = self.reparameterize(mu, log_var, mode)
         if self.use_activation_lat:
             z = self.activation_fn_dec()(z)
         return z, mu, log_var
 
 
-    def forward(self, x: torch.tensor, cat_list: Iterable[torch.tensor]):
+    def forward(self, x: torch.tensor, cat_list: Iterable[torch.tensor], mode):
         """
         Forward computation on minibatch of samples.
         
@@ -267,7 +278,7 @@ class scOntoVAE(nn.Module):
             shape of each tensor is (minibatch, 1)
         """
 
-        z, mu, log_var = self._get_embedding(x, cat_list)
+        z, mu, log_var = self._get_embedding(x, cat_list, mode)
         reconstruction = self.decoder(z, cat_list)
         return z, mu, log_var, reconstruction
 
@@ -589,7 +600,7 @@ class scOntoVAE(nn.Module):
             x = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
             cat_list = torch.split(minibatch[1].T.to(self.device), 1)
             if retrieve == 'latent':
-                result, _, _ = self._get_embedding(x, cat_list)
+                result, _, _ = self._get_embedding(x, cat_list, mode)
             elif retrieve == 'act':
                 result = self._hook_activities(x, cat_list, lin_layer)
             else:

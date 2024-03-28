@@ -55,8 +55,7 @@ class Encoder(nn.Module):
                  activation_fn: nn.Module = nn.ReLU,
                  bias: bool = True,
                  inject_covariates: bool = True,
-                 drop: float = 0.2, 
-                 z_drop: float = 0.5):
+                 drop: float = 0.2):
         super().__init__()
 
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -65,7 +64,6 @@ class Encoder(nn.Module):
         self.layer_nums = [self.layer_dims[i:i+2] for i in range(len(self.layer_dims)-1)]
         self.latent_dim = latent_dim
         self.drop = drop
-        self.z_drop = z_drop
 
         if n_cat_list is not None:
             # n_cat = 1 will be ignored
@@ -102,12 +100,10 @@ class Encoder(nn.Module):
 
         self.mu = nn.Sequential(
             nn.Linear(self.layer_dims[-1] + self.cat_dim * inject_covariates, self.latent_dim),
-            nn.Dropout(p=self.z_drop) if self.z_drop > 0 else None
         ).to(self.device)
 
         self.logvar = nn.Sequential(
             nn.Linear(self.layer_dims[-1] + self.cat_dim * inject_covariates, self.latent_dim),
-            nn.Dropout(p=self.z_drop) if self.z_drop > 0 else None
         ).to(self.device)
 
 
