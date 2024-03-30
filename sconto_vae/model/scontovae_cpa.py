@@ -204,7 +204,6 @@ class OntoVAEcpa(scOntoVAE):
             
         # sample from latent space
         z_basal = self.reparameterize(mu, log_var, mode)
-        z_mask = torch.where(z_basal == 0)
         if self.use_activation_lat and self.use_activation_dec:
             z_basal = self.activation_fn_dec()(z_basal)
 
@@ -214,7 +213,6 @@ class OntoVAEcpa(scOntoVAE):
             x = self.covars_embeddings[key](cov_list[i].long().squeeze())
             x_mix = self.covars_embeddings[key](cov_list[i].long().squeeze()[index])
             x_new = mixup_lambda * x + (1. - mixup_lambda) * x_mix
-            x_new[z_mask] = 0
             covars_embeddings[key] = x_new
 
         # create different z's
