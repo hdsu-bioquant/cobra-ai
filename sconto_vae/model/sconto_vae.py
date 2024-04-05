@@ -15,7 +15,10 @@ from typing import Iterable, Literal
 from anndata import AnnData
 
 from sconto_vae.module.modules import Encoder, OntoDecoder
-from sconto_vae.module.utils import split_adata, FastTensorDataLoader
+from sconto_vae.module.utils import split_adata, FastTensorDataLoader, update_bn
+
+from torch.optim.swa_utils import AveragedModel, SWALR
+from torch.optim.lr_scheduler import CosineAnnealingLR
 
 # imports for autotuning
 from sconto_vae.module.decorators import classproperty
@@ -220,7 +223,7 @@ class scOntoVAE(nn.Module):
             covs = pd.concat([covs, adata.obsm['_ontovae_categorical_covs']], axis=1)
         return torch.tensor(np.array(covs))
 
-    def reparameterize(self, mu, log_var, mode='train'):
+    def reparameterize(self, mu, log_var):
         """
         Performs the reparameterization trick.
 
@@ -238,11 +241,11 @@ class scOntoVAE(nn.Module):
         eps = torch.randn_like(sigma) 
         z = mu + eps * sigma
         if self.z_drop > 0:
-            if mode == "train":
+            if self.training:
                 z = nn.Dropout(p=self.z_drop)(z)
         return z
         
-    def _get_embedding(self, x: torch.tensor, cat_list: Iterable[torch.tensor], mode):
+    def _get_embedding(self, x: torch.tensor, cat_list: Iterable[torch.tensor]):
         """
         Generates latent space embedding.
 
@@ -255,13 +258,13 @@ class scOntoVAE(nn.Module):
             shape of each tensor is (minibatch, 1)
         """
         mu, log_var = self.encoder(x, cat_list)
-        z = self.reparameterize(mu, log_var, mode)
+        z = self.reparameterize(mu, log_var)
         if self.use_activation_lat:
             z = self.activation_fn_dec()(z)
         return z, mu, log_var
 
 
-    def forward(self, x: torch.tensor, cat_list: Iterable[torch.tensor], mode):
+    def forward(self, x: torch.tensor, cat_list: Iterable[torch.tensor]):
         """
         Forward computation on minibatch of samples.
         
@@ -274,11 +277,11 @@ class scOntoVAE(nn.Module):
             shape of each tensor is (minibatch, 1)
         """
 
-        z, mu, log_var = self._get_embedding(x, cat_list, mode)
+        z, mu, log_var = self._get_embedding(x, cat_list)
         reconstruction = self.decoder(z, cat_list)
         return z, mu, log_var, reconstruction
 
-    def vae_loss(self, reconstruction, mu, log_var, data, kl_coeff, mode='train', run=None):
+    def vae_loss(self, reconstruction, mu, log_var, data, kl_coeff, run=None):
         """
         Calculates VAE loss as combination of reconstruction loss and weighted Kullback-Leibler loss.
         """
@@ -288,6 +291,7 @@ class scOntoVAE(nn.Module):
         else:
             rec_loss = F.mse_loss(reconstruction, data, reduction="sum")
         if run is not None:
+            mode = 'train' if self.training else 'val'
             run["metrics/" + mode + "/kl_loss"].log(kl_loss)
             run["metrics/" + mode + "/rec_loss"].log(rec_loss)
         return torch.mean(rec_loss + kl_coeff*kl_loss)
@@ -326,7 +330,7 @@ class scOntoVAE(nn.Module):
 
             # forward step
             _, mu, log_var, reconstruction = self.forward(data, cat_list)
-            loss = self.vae_loss(reconstruction, mu, log_var, data, kl_coeff, mode='train', run=run)
+            loss = self.vae_loss(reconstruction, mu, log_var, data, kl_coeff, run=run)
             running_loss += loss.item()
 
             # backward propagation
@@ -378,7 +382,7 @@ class scOntoVAE(nn.Module):
 
             # forward step
             _, mu, log_var, reconstruction = self.forward(data, cat_list)
-            loss = self.vae_loss(reconstruction, mu, log_var,data, kl_coeff, mode='val', run=run)
+            loss = self.vae_loss(reconstruction, mu, log_var,data, kl_coeff, run=run)
             running_loss += loss.item()
 
         # compute avg val loss
@@ -397,6 +401,8 @@ class scOntoVAE(nn.Module):
                     pos_weights: Tunable[bool] = True,
                     use_rec_weights: bool = False,
                     epochs: int=300, 
+                    swa_model=None,
+                    swa_start: int=25,
                     run=None):
         """
         Parameters
@@ -480,10 +486,22 @@ class scOntoVAE(nn.Module):
 
         val_loss_min = float('inf')
         optimizer = optimizer(self.parameters(), lr = lr)
+        scheduler = CosineAnnealingLR(optimizer, T_max=100)
+
+        if swa_model is not None:
+            swa_scheduler = SWALR(optimizer, swa_lr = 0.05)
 
         for epoch in range(epochs):
             print(f"Epoch {epoch+1} of {epochs}")
             train_epoch_loss = self.train_round(trainloader, kl_coeff, optimizer, pos_weights, run)
+            
+            if swa_model is not None:
+                if epoch >= swa_start:
+                    swa_model.update_parameters(self)
+                    swa_scheduler.step()
+                else:
+                    scheduler.step()
+
             val_epoch_loss = self.val_round(valloader, kl_coeff, run)
             train.report({"validation_loss": val_epoch_loss})
 
@@ -503,6 +521,10 @@ class scOntoVAE(nn.Module):
                 
             print(f"Train Loss: {train_epoch_loss:.4f}")
             print(f"Val Loss: {val_epoch_loss:.4f}")
+
+        # update swa_model
+        if swa_model is not None:
+            update_bn(trainloader, swa_model, use_cobra=False)
 
     def _get_activation(self, index, activation={}):
         def hook(model, input, output):
@@ -596,7 +618,7 @@ class scOntoVAE(nn.Module):
             x = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
             cat_list = torch.split(minibatch[1].T.to(self.device), 1)
             if retrieve == 'latent':
-                result, _, _ = self._get_embedding(x, cat_list, mode)
+                result, _, _ = self._get_embedding(x, cat_list)
             elif retrieve == 'act':
                 result = self._hook_activities(x, cat_list, lin_layer)
             else:

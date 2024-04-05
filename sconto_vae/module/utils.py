@@ -480,3 +480,60 @@ def paired_wilcox_test(adata: AnnData, control, perturbed, direction='up', optio
 
         res = res.sort_values('pval').reset_index(drop=True)
         return(res)
+
+# adapted from torch.optim.swa_utils
+
+@torch.no_grad()
+def update_bn(loader, model, use_cobra):
+    r"""Updates BatchNorm running_mean, running_var buffers in the model.
+
+    It performs one pass over data in `loader` to estimate the activation
+    statistics for BatchNorm layers in the model.
+    Args:
+        loader (torch.utils.data.DataLoader): dataset loader to compute the
+            activation statistics on. Each data batch should be either a
+            tensor, or a list/tuple whose first element is a tensor
+            containing data.
+        model (torch.nn.Module): model for which we seek to update BatchNorm
+            statistics.
+        device (torch.device, optional): If set, data will be transferred to
+            :attr:`device` before being passed into :attr:`model`.
+
+    Example:
+        >>> # xdoctest: +SKIP("Undefined variables")
+        >>> loader, model = ...
+        >>> torch.optim.swa_utils.update_bn(loader, model)
+
+    .. note::
+        The `update_bn` utility assumes that each data batch in :attr:`loader`
+        is either a tensor or a list or tuple of tensors; in the latter case it
+        is assumed that :meth:`model.forward()` should be called on the first
+        element of the list or tuple corresponding to the data batch.
+    """
+    momenta = {}
+    for module in model.modules():
+        if isinstance(module, torch.nn.modules.batchnorm._BatchNorm):
+            module.reset_running_stats()
+            momenta[module] = module.momentum
+
+    if not momenta:
+        return
+
+    was_training = model.training
+    model.train()
+    for module in momenta.keys():
+        module.momentum = None
+
+    for input in loader:
+        if isinstance(input, (list, tuple)):
+            data = torch.tensor(input[0].todense(), dtype=torch.float32).to(model.module.device)
+            cat_list = torch.split(input[1].T.to(model.module.device), 1)
+            if use_cobra:
+                cov_list = torch.split(input[2].T.to(model.module.device), 1)
+                model.module.forward(data, cat_list, cov_list, mixup_lambda=1)
+            else:
+                model.module.forward(data, cat_list)
+
+    for bn_module in momenta.keys():
+        bn_module.momentum = momenta[bn_module]
+    model.train(was_training)

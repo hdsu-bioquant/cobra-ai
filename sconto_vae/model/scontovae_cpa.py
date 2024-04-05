@@ -18,7 +18,10 @@ from anndata import AnnData
 from sconto_vae.model.sconto_vae import scOntoVAE
 from sconto_vae.module.modules import Classifier
 from sconto_vae.module.metrics import knn_purity
-from sconto_vae.module.utils import split_adata, FastTensorDataLoader
+from sconto_vae.module.utils import split_adata, FastTensorDataLoader, update_bn
+
+from torch.optim.swa_utils import AveragedModel, SWALR
+from torch.optim.lr_scheduler import CosineAnnealingLR
 
 # imports for autotuning
 from sconto_vae.module.decorators import classproperty
@@ -174,7 +177,7 @@ class OntoVAEcpa(scOntoVAE):
 
         self.to(self.device)
 
-    def _get_embedding(self, x: torch.tensor, cat_list: Iterable[torch.tensor], cov_list: Iterable[torch.tensor], mode, mixup_lambda=1):
+    def _get_embedding(self, x: torch.tensor, cat_list: Iterable[torch.tensor], cov_list: Iterable[torch.tensor], mixup_lambda=1):
         """
         Generates latent space embedding.
 
@@ -203,7 +206,7 @@ class OntoVAEcpa(scOntoVAE):
         mu, log_var = self.encoder(x, cat_list)
             
         # sample from latent space
-        z_basal = self.reparameterize(mu, log_var, mode)
+        z_basal = self.reparameterize(mu, log_var)
         if self.use_activation_lat and self.use_activation_dec:
             z_basal = self.activation_fn_dec()(z_basal)
 
@@ -227,7 +230,7 @@ class OntoVAEcpa(scOntoVAE):
 
         return z_dict, mu, log_var
   
-    def forward(self, x: torch.tensor, cat_list: Iterable[torch.tensor], cov_list: Iterable[torch.tensor], mixup_lambda: float, mode):
+    def forward(self, x: torch.tensor, cat_list: Iterable[torch.tensor], cov_list: Iterable[torch.tensor], mixup_lambda: float):
         """
         Forward computation on minibatch of samples.
         
@@ -245,7 +248,7 @@ class OntoVAEcpa(scOntoVAE):
             coefficient for adversarial training
         """
         # inference
-        zdict, mu, log_var = self._get_embedding(x, cat_list, cov_list, mode, mixup_lambda)
+        zdict, mu, log_var = self._get_embedding(x, cat_list, cov_list, mixup_lambda)
 
         # decoding
         reconstruction = self.decoder(zdict['z_total'], cat_list)
@@ -291,13 +294,14 @@ class OntoVAEcpa(scOntoVAE):
         
         return covars_pred
 
-    def clf_loss(self, class_output, y, cov: str, mode='train', run=None):
+    def clf_loss(self, class_output, y, cov: str, run=None):
         """
         Calculates loss of a covariate classifier
         """
         class_loss = nn.CrossEntropyLoss()
         clf_loss = class_loss(class_output, y)
         if run is not None:
+            mode = "train" if self.training else "val"
             run["metrics/" + mode + "/" + cov + "_clf_loss"].log(clf_loss)
         return clf_loss
 
@@ -358,14 +362,14 @@ class OntoVAEcpa(scOntoVAE):
             optimizer_vae.zero_grad()
 
             # forward step generator
-            z_dict, mu, logvar, reconstruction = self.forward(data, cat_list, cov_list, mixup_lambda, mode='train')
+            z_dict, mu, logvar, reconstruction = self.forward(data, cat_list, cov_list, mixup_lambda)
             z_basal = z_dict["z_basal"]
             covars_pred = self.adv_forward(z_basal, cat_list)
-            vae_loss = self.vae_loss(reconstruction, mu, logvar, data, kl_coeff, mode='train', run=run)
+            vae_loss = self.vae_loss(reconstruction, mu, logvar, data, kl_coeff, run=run)
             adv_loss = 0.0
             for i, vals in enumerate(cov_list):
                 cov = list(self.cov_dict.keys())[i]
-                cov_loss = self.clf_loss(covars_pred[cov], vals.long().squeeze(), cov=cov, mode='train', run=run)
+                cov_loss = self.clf_loss(covars_pred[cov], vals.long().squeeze(), cov=cov, run=run)
                 adv_loss += cov_loss
             loss = vae_loss - adv_coeff * adv_loss
             running_loss_vae += loss.item()
@@ -395,7 +399,7 @@ class OntoVAEcpa(scOntoVAE):
                 adv_loss = 0.0
                 for i, vals in enumerate(cov_list):
                     cov = list(self.cov_dict.keys())[i]
-                    cov_loss = self.clf_loss(covars_pred[cov], vals.long().squeeze(), cov=cov, mode='train', run=run)
+                    cov_loss = self.clf_loss(covars_pred[cov], vals.long().squeeze(), cov=cov, run=run)
                     adv_loss += cov_loss
                 loss = adv_loss + pen_coeff * covars_pred['penalty']
                 running_loss_adv += loss
@@ -458,14 +462,14 @@ class OntoVAEcpa(scOntoVAE):
             cov_list = torch.split(minibatch[2].T.to(self.device), 1)
 
             # forward step generator
-            z_dict, mu, logvar, reconstruction = self.forward(data, cat_list, cov_list, mixup_lambda=1, mode='val')
+            z_dict, mu, logvar, reconstruction = self.forward(data, cat_list, cov_list, mixup_lambda=1)
             z_basal = z_dict["z_basal"]
             covars_pred = self.adv_forward(z_basal, cat_list)
-            vae_loss = self.vae_loss(reconstruction, mu, logvar, data, kl_coeff, mode='val', run=run)
+            vae_loss = self.vae_loss(reconstruction, mu, logvar, data, kl_coeff, run=run)
             adv_loss = 0.0
             for i, vals in enumerate(cov_list):
                 cov = list(self.cov_dict.keys())[i]
-                cov_loss = self.clf_loss(covars_pred[cov], vals.long().squeeze(), cov=cov, mode='val', run=run)
+                cov_loss = self.clf_loss(covars_pred[cov], vals.long().squeeze(), cov=cov, run=run)
                 adv_loss += cov_loss
             loss = vae_loss - adv_coeff * adv_loss
             running_loss_vae += loss.item()
@@ -503,6 +507,8 @@ class OntoVAEcpa(scOntoVAE):
                     pos_weights: Tunable[bool] = True,
                     use_rec_weights: bool = False,
                     epochs: int=300, 
+                    swa_model=None,
+                    swa_start: int=25,
                     run=None):
         """
         Parameters
@@ -606,9 +612,17 @@ class OntoVAEcpa(scOntoVAE):
 
         val_loss_min = float('inf')
         val_purity_min = float('inf')
-        optimizer_vae = optimizer(list(self.encoder.parameters()) + list(self.decoder.parameters()) + list(self.covars_embeddings.parameters()), lr = lr_vae)
-        optimizer_adv = optimizer(self.covars_classifiers.parameters(), lr = lr_adv)
 
+        optimizer_vae = optimizer(list(self.encoder.parameters()) + list(self.decoder.parameters()) + list(self.covars_embeddings.parameters()), lr = lr_vae)
+        scheduler_vae = CosineAnnealingLR(optimizer_vae, T_max=100)
+        
+        optimizer_adv = optimizer(self.covars_classifiers.parameters(), lr = lr_adv)
+        scheduler_adv = CosineAnnealingLR(optimizer_adv, T_max=100)
+
+        if swa_model is not None:
+            swa_scheduler_vae = SWALR(optimizer_vae, swa_lr = 0.05)
+            swa_scheduler_adv = SWALR(optimizer_adv, swa_lr = 0.05)
+        
         for epoch in range(epochs):
             print(f"Epoch {epoch+1} of {epochs}")
             train_epoch_loss_vae, train_epoch_loss_adv, train_knn_purity = self.train_round(trainloader, 
@@ -621,6 +635,16 @@ class OntoVAEcpa(scOntoVAE):
                                                                                             optimizer_adv,
                                                                                             pos_weights, 
                                                                                             run)
+            
+            if swa_model is not None:
+                if epoch >= swa_start:
+                    swa_model.update_parameters(self)
+                    swa_scheduler_vae.step()
+                    swa_scheduler_adv.step()
+                else:
+                    scheduler_vae.step()
+                    scheduler_adv.step()
+
             val_epoch_loss_vae, val_knn_purity = self.val_round(valloader, 
                                                                 kl_coeff, 
                                                                 adv_coeff,
@@ -645,6 +669,10 @@ class OntoVAEcpa(scOntoVAE):
                     'knn_purity': val_knn_purity,
                 }, modelpath + '/best_model.pt')
                 val_loss_min = val_epoch_loss_vae
+        
+        # update swa_model
+        if swa_model is not None:
+            update_bn(trainloader, swa_model, use_cobra=True)
                 
 
     @torch.no_grad()
@@ -673,7 +701,7 @@ class OntoVAEcpa(scOntoVAE):
         self.eval()
 
         # get latent space embedding dict
-        zdict, _, _ = self._get_embedding(x, cat_list, cov_list, mode='val')
+        zdict, _, _ = self._get_embedding(x, cat_list, cov_list)
         dict_keys = list(zdict.keys())
 
         # pass forward the different z's
@@ -737,7 +765,7 @@ class OntoVAEcpa(scOntoVAE):
             cat_list = torch.split(minibatch[1].T.to(self.device), 1)
             cov_list = torch.split(minibatch[2].T.to(self.device), 1)
             if retrieve == 'latent':
-                result, _, _ = self._get_embedding(x, cat_list, cov_list, mode="val")
+                result, _, _ = self._get_embedding(x, cat_list, cov_list)
                 if self.root_layer_latent:
                     result_avg = {k: self._average_neuronnum(v.to('cpu').detach().numpy()) for k, v in result.items()}
                 else:
