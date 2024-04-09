@@ -861,7 +861,7 @@ class OntoVAEcpa(scOntoVAE):
         else:
             adata = self.adata 
         
-        batch = self._cov_tensor(adata)
+        batch = torch.zeros((embedding.shape[0], self._cov_tensor(adata).shape[1]), dtype=torch.int8)
         
         embedding = torch.tensor(embedding, dtype=torch.float32)
         dataloader = FastTensorDataLoader(embedding, 
@@ -894,7 +894,7 @@ class OntoVAEcpa(scOntoVAE):
             res = []
             for minibatch in dataloader:
                 self.eval()
-                z = torch.tensor(minibatch[0], dtype=torch.float32).to(self.device)
+                z = minibatch[0].to(self.device)
                 cat_list = torch.split(minibatch[1].T.to(self.device), 1)
                 
                 activation = {}
@@ -902,7 +902,7 @@ class OntoVAEcpa(scOntoVAE):
                 self._attach_hooks(lin_layer=lin_layer, activation=activation, hooks=hooks)
                 
                 reconstruction = self.decoder(z, cat_list)
-                res.append(reconstruction)
+                res.append(reconstruction.to('cpu').detach().numpy())
             res_out = np.vstack([r for r in res])
                 
                 
