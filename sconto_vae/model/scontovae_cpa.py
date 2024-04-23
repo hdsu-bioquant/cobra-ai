@@ -655,6 +655,9 @@ class OntoVAEcpa(scOntoVAE):
                 else:
                     scheduler_vae.step()
                     scheduler_adv.step()
+            else:
+                scheduler_vae.step()
+                scheduler_adv.step()
                     
             val_epoch_loss_vae, val_knn_purity = self.val_round(valloader, 
                                                                 kl_coeff, 
