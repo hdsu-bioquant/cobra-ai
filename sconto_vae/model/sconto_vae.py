@@ -15,7 +15,7 @@ from typing import Iterable, Literal
 from anndata import AnnData
 
 from sconto_vae.module.modules import Encoder, OntoDecoder
-from sconto_vae.module.utils import split_adata, FastTensorDataLoader, update_bn
+from sconto_vae.module.utils import split_adata, FastTensorDataLoader, EarlyStopper, update_bn
 
 from torch.optim.swa_utils import AveragedModel, SWALR
 from torch.optim.lr_scheduler import CosineAnnealingLR
@@ -401,6 +401,8 @@ class scOntoVAE(nn.Module):
                     pos_weights: Tunable[bool] = True,
                     use_rec_weights: bool = False,
                     epochs: int=300, 
+                    early_stopping: bool=True,
+                    patience: int=10,
                     swa_model=None,
                     swa_start: int=25,
                     run=None):
@@ -444,7 +446,9 @@ class scOntoVAE(nn.Module):
                             'optimizer': str(optimizer).split("'")[1],
                             'pos_weights': pos_weights,
                             'use_rec_weights': use_rec_weights,
-                            'epochs': epochs
+                            'epochs': epochs,
+                            'early_stopping': early_stopping,
+                            'patience': patience
                             }
             with open(modelpath + '/train_params.json', 'w') as fp:
                 json.dump(train_params, fp, indent=4)
@@ -491,6 +495,9 @@ class scOntoVAE(nn.Module):
         if swa_model is not None:
             swa_scheduler = SWALR(optimizer, swa_lr = 0.05)
 
+        if early_stopping:
+                early_stopper = EarlyStopper(patience=patience)
+
         for epoch in range(epochs):
             print(f"Epoch {epoch+1} of {epochs}")
             train_epoch_loss = self.train_round(trainloader, kl_coeff, optimizer, pos_weights, run)
@@ -503,6 +510,11 @@ class scOntoVAE(nn.Module):
                     scheduler.step()
 
             val_epoch_loss = self.val_round(valloader, kl_coeff, run)
+
+            if early_stopping:
+                if early_stopper.early_stop(val_epoch_loss):
+                    break
+
             train.report({"validation_loss": val_epoch_loss})
 
             if run is not None:

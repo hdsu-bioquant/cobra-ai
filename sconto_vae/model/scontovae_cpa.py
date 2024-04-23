@@ -18,7 +18,7 @@ from anndata import AnnData
 from sconto_vae.model.sconto_vae import scOntoVAE
 from sconto_vae.module.modules import Classifier
 from sconto_vae.module.metrics import knn_purity
-from sconto_vae.module.utils import split_adata, FastTensorDataLoader, update_bn
+from sconto_vae.module.utils import split_adata, FastTensorDataLoader, EarlyStopper, update_bn
 
 from torch.optim.swa_utils import AveragedModel, SWALR
 from torch.optim.lr_scheduler import CosineAnnealingLR
@@ -507,6 +507,8 @@ class OntoVAEcpa(scOntoVAE):
                     pos_weights: Tunable[bool] = True,
                     use_rec_weights: bool = False,
                     epochs: int=300, 
+                    early_stopping: bool=True,
+                    patience: int=10,
                     swa_model=None,
                     swa_start: int=25,
                     run=None):
@@ -543,6 +545,10 @@ class OntoVAEcpa(scOntoVAE):
             whether to make weights in decoder positive
         epochs
             over how many epochs to train
+        early_stopping
+            if early stopping should be used during training
+        patience
+            number of epochs after which training stops if loss is not improved
         run
             passed here if logging to Neptune should be carried out
         """
@@ -565,7 +571,9 @@ class OntoVAEcpa(scOntoVAE):
                             'optimizer': str(optimizer).split("'")[1],
                             'pos_weights': pos_weights,
                             'use_rec_weights': use_rec_weights,
-                            'epochs': epochs
+                            'epochs': epochs,
+                            'early_stopping': early_stopping,
+                            'patience': patience
                             }
             with open(modelpath + '/train_params.json', 'w') as fp:
                 json.dump(train_params, fp, indent=4)
@@ -623,6 +631,9 @@ class OntoVAEcpa(scOntoVAE):
             swa_scheduler_vae = SWALR(optimizer_vae, swa_lr = 0.05)
             swa_scheduler_adv = SWALR(optimizer_adv, swa_lr = 0.05)
         
+        if early_stopping:
+                early_stopper = EarlyStopper(patience=patience)
+        
         for epoch in range(epochs):
             print(f"Epoch {epoch+1} of {epochs}")
             train_epoch_loss_vae, train_epoch_loss_adv, train_knn_purity = self.train_round(trainloader, 
@@ -644,11 +655,17 @@ class OntoVAEcpa(scOntoVAE):
                 else:
                     scheduler_vae.step()
                     scheduler_adv.step()
-
+                    
             val_epoch_loss_vae, val_knn_purity = self.val_round(valloader, 
                                                                 kl_coeff, 
                                                                 adv_coeff,
                                                                 run)
+            
+            if early_stopping:
+                if early_stopper.early_stop(val_epoch_loss_vae):
+                    break
+
+
             train.report({"validation_loss": val_epoch_loss_vae})
             
             
