@@ -481,6 +481,27 @@ def paired_wilcox_test(adata: AnnData, control, perturbed, direction='up', optio
         res = res.sort_values('pval').reset_index(drop=True)
         return(res)
 
+
+# class for Early Stopping
+# adapted from: https://stackoverflow.com/questions/71998978/early-stopping-in-pytorch
+
+class EarlyStopper:
+    def __init__(self, patience=10):
+        self.patience = patience
+        self.counter = 0
+        self.min_validation_loss = float('inf')
+
+    def early_stop(self, validation_loss):
+        if validation_loss < self.min_validation_loss:
+            self.min_validation_loss = validation_loss
+            self.counter = 0
+        else:
+            self.counter += 1
+            if self.counter >= self.patience:
+                return True
+        return False
+
+
 # adapted from torch.optim.swa_utils
 
 @torch.no_grad()
