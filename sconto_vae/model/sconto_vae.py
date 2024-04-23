@@ -17,7 +17,6 @@ from anndata import AnnData
 from sconto_vae.module.modules import Encoder, OntoDecoder
 from sconto_vae.module.utils import split_adata, FastTensorDataLoader, EarlyStopper, update_bn
 
-from torch.optim.swa_utils import AveragedModel, SWALR
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
 # imports for autotuning
@@ -403,8 +402,6 @@ class scOntoVAE(nn.Module):
                     epochs: int=300, 
                     early_stopping: bool=True,
                     patience: int=10,
-                    swa_model=None,
-                    swa_start: int=25,
                     run=None):
         """
         Parameters
@@ -492,9 +489,6 @@ class scOntoVAE(nn.Module):
         optimizer = optimizer(self.parameters(), lr = lr)
         scheduler = CosineAnnealingLR(optimizer, T_max=100)
 
-        if swa_model is not None:
-            swa_scheduler = SWALR(optimizer, swa_lr = 0.05)
-
         if early_stopping:
                 early_stopper = EarlyStopper(patience=patience)
 
@@ -502,12 +496,7 @@ class scOntoVAE(nn.Module):
             print(f"Epoch {epoch+1} of {epochs}")
             train_epoch_loss = self.train_round(trainloader, kl_coeff, optimizer, pos_weights, run)
             
-            if swa_model is not None:
-                if epoch >= swa_start:
-                    swa_model.update_parameters(self)
-                    swa_scheduler.step()
-                else:
-                    scheduler.step()
+            scheduler.step()
 
             val_epoch_loss = self.val_round(valloader, kl_coeff, run)
 
@@ -533,10 +522,6 @@ class scOntoVAE(nn.Module):
                 
             print(f"Train Loss: {train_epoch_loss:.4f}")
             print(f"Val Loss: {val_epoch_loss:.4f}")
-
-        # update swa_model
-        if swa_model is not None:
-            update_bn(trainloader, swa_model, use_cobra=False)
 
     def _get_activation(self, index, activation={}):
         def hook(model, input, output):

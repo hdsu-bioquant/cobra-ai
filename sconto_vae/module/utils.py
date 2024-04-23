@@ -505,7 +505,7 @@ class EarlyStopper:
 # adapted from torch.optim.swa_utils
 
 @torch.no_grad()
-def update_bn(loader, model, use_cobra):
+def update_bn(loader, model):
     r"""Updates BatchNorm running_mean, running_var buffers in the model.
 
     It performs one pass over data in `loader` to estimate the activation
@@ -549,11 +549,8 @@ def update_bn(loader, model, use_cobra):
         if isinstance(input, (list, tuple)):
             data = torch.tensor(input[0].todense(), dtype=torch.float32).to(model.module.device)
             cat_list = torch.split(input[1].T.to(model.module.device), 1)
-            if use_cobra:
-                cov_list = torch.split(input[2].T.to(model.module.device), 1)
-                model.module.forward(data, cat_list, cov_list, mixup_lambda=1)
-            else:
-                model.module.forward(data, cat_list)
+            cov_list = torch.split(input[2].T.to(model.module.device), 1)
+            model.module.forward(data, cat_list, cov_list, mixup_lambda=1)
 
     for bn_module in momenta.keys():
         bn_module.momentum = momenta[bn_module]

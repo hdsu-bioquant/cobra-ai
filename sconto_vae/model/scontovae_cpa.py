@@ -689,7 +689,7 @@ class OntoVAEcpa(scOntoVAE):
         
         # update swa_model
         if swa_model is not None:
-            update_bn(trainloader, swa_model, use_cobra=True)
+            update_bn(trainloader, swa_model)
                 
 
     @torch.no_grad()
