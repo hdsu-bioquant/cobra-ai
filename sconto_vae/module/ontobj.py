@@ -153,11 +153,8 @@ class Ontobj():
             self.identifiers = 'Ensembl' if 'ENS' in gene_annot.iloc[0,0] else 'HGNC'
 
             # create initial annot file
-            if filter_id is not None:
-                annot = self._dag_annot(dag, gene_annot, filter_id=filter_id)
-            else:
-                annot = self._dag_annot(dag, gene_annot)
-
+            annot = self._dag_annot(dag, gene_annot, filter_id=filter_id)
+            
             # convert gene annot file to dictionary
             gene_term_dict = {a: b["ID"].tolist() for a,b in gene_annot.groupby("Gene")}
 
