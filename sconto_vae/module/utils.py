@@ -21,8 +21,8 @@ import colorcet as cc
 
 def setup_anndata_ontovae(adata: AnnData,
                   ontobj: Ontobj,
-                top_thresh: int=1000,
-                bottom_thresh: int=30,
+                top_thresh: Optional[int]=None,
+                bottom_thresh: Optional[int]=None,
                 batch_key: Optional[str] = None,
                 labels_key: Optional[str] = None,
                 categorical_covariate_keys: Optional[list[str]] = None,
@@ -70,8 +70,13 @@ def setup_anndata_ontovae(adata: AnnData,
             "Current adata object is a View. Please run `adata = adata.copy()`"
         )
 
-    if not str(top_thresh) + '_' + str(bottom_thresh) in ontobj.genes.keys():
-            raise ValueError('Available trimming thresholds are: ' + ', '.join(list(ontobj.genes.keys())))
+    if top_thresh is not None and bottom_thresh is not None:
+        if not str(top_thresh) + '_' + str(bottom_thresh) in ontobj.annot.keys():
+            raise ValueError('Available trimming thresholds are: ' + ', '.join(list(ontobj.annot.keys())))
+    else:
+        top_thresh = list(ontobj.annot.keys())[0].split('_')[0]
+        bottom_thresh = list(ontobj.annot.keys())[0].split('_')[1]
+
     
     if layer is not None:
          adata.X = adata.layers[layer].copy()
@@ -430,7 +435,7 @@ def unpaired_wilcox_test(adata: AnnData, group1, group2):
 
 """Differential testing for pathway activities after perturbation"""
 
-def paired_wilcox_test(adata: AnnData, control, perturbed, direction='up', option='terms'):
+def  wilcox_test(adata: AnnData, control, perturbed, direction='up', option='terms'):
         """ 
         Performs paired Wilcoxon test between activities and perturbed activities.
 
@@ -445,10 +450,6 @@ def paired_wilcox_test(adata: AnnData, control, perturbed, direction='up', optio
         direction
             up: higher in perturbed
             down: lower in perturbed
-        top_thresh
-            top threshold for trimming
-        bottom_thresh
-            bottom_threshold for trimming
         option
             'terms' or 'genes'
         """

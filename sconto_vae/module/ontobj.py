@@ -340,7 +340,7 @@ class Ontobj():
 
 
 
-    def create_masks(self, top_thresh: int=1000, bottom_thresh: int=30):
+    def create_masks(self, top_thresh: int=None, bottom_thresh: int=None):
 
         """
         Creation of masks to initialize the wiring in the latent space and decoder of OntoVAE.
@@ -353,21 +353,21 @@ class Ontobj():
             bottom_threshold for trimming
         """
 
-        # check if neccesary objects exist
-        if str(top_thresh) + '_' + str(bottom_thresh) not in self.graph.keys():
-            raise ValueError('Trimmed graph with specified thresholds missing, trim_dag function needs to be run first!')
-        else:
-            onto_dict = self.graph[str(top_thresh) + '_' + str(bottom_thresh)].copy()
+        # check if trim_dag function was run
+        if not self.annot:
+              raise ValueError('The trim_dag() function needs to be run first!')
 
-        if str(top_thresh) + '_' + str(bottom_thresh) not in self.annot.keys():
-            raise ValueError('Trimmed annotation with specified thresholds missing, trim_dag function needs to be run first!')
+        # define top and borrom thresh
+        if top_thresh is not None and bottom_thresh is not None:
+            if not str(top_thresh) + '_' + str(bottom_thresh) in self.annot.keys():
+                raise ValueError('Available trimming thresholds are: ' + ', '.join(list(annot.genes.keys())))
         else:
-            annot = self.annot[str(top_thresh) + '_' + str(bottom_thresh)].copy()
+            top_thresh = list(self.annot.keys())[0].split('_')[0]
+            bottom_thresh = list(self.annot.keys())[0].split('_')[1]
 
-        if str(top_thresh) + '_' + str(bottom_thresh) not in self.genes.keys():
-            raise ValueError('Trimmed gene list with specified thresholds missing, trim_dag function needs to be run first!')
-        else:
-            genes = self.genes[str(top_thresh) + '_' + str(bottom_thresh)].copy()
+        annot = self.annot[str(top_thresh) + '_' + str(bottom_thresh)].copy()
+        onto_dict = self.graph[str(top_thresh) + '_' + str(bottom_thresh)].copy()
+        genes = self.genes[str(top_thresh) + '_' + str(bottom_thresh)].copy()
 
         # check if mask slot for thresholds exists
         if str(top_thresh) + '_' + str(bottom_thresh) not in self.masks.keys():
@@ -398,7 +398,7 @@ class Ontobj():
         return masks
 
 
-    def compute_wsem_sim(self, obo: str, top_thresh: int=1000, bottom_thresh: int=30):
+    def compute_wsem_sim(self, obo: str, top_thresh: int=None, bottom_thresh: int=None):
 
         """
         Wang semantic similarities between a list of ontology terms are computed.
@@ -413,11 +413,19 @@ class Ontobj():
             bottom_threshold for trimming
         """
 
-        # check if neccesary files exist and load them 
-        if str(top_thresh) + '_' + str(bottom_thresh) not in self.annot.keys():
-            raise ValueError('Trimmed annotation with specified thresholds missing, trim_dag function needs to be run first!')
+        # check if trim_dag function was run
+        if not self.annot:
+              raise ValueError('The trim_dag() function needs to be run first!')
+
+        # define top and borrom thresh
+        if top_thresh is not None and bottom_thresh is not None:
+            if not str(top_thresh) + '_' + str(bottom_thresh) in self.annot.keys():
+                raise ValueError('Available trimming thresholds are: ' + ', '.join(list(self.annot.genes.keys())))
         else:
-            annot = self.annot[str(top_thresh) + '_' + str(bottom_thresh)].copy()
+            top_thresh = list(self.annot.keys())[0].split('_')[0]
+            bottom_thresh = list(self.annot.keys())[0].split('_')[1]
+
+        annot = self.annot[str(top_thresh) + '_' + str(bottom_thresh)].copy()
 
         dag = get_godag(obo, optional_attrs={'relationship'}, prt=None)
         ids = annot['ID'].tolist()
@@ -427,7 +435,7 @@ class Ontobj():
         self.sem_sim[str(top_thresh) + '_' + str(bottom_thresh)] = wsem_sim
 
     
-    def extract_annot(self, top_thresh: int=1000, bottom_thresh: int=30):
+    def extract_annot(self, top_thresh: int=None, bottom_thresh: int=None):
         """
         Helper function to extract table from annot slot.
 
@@ -438,9 +446,22 @@ class Ontobj():
         bottom_thresh
             bottom_threshold for trimming
         """
+
+        # check if trim_dag function was run
+        if not self.annot:
+              raise ValueError('The trim_dag() function needs to be run first!')
+
+        # define top and borrom thresh
+        if top_thresh is not None and bottom_thresh is not None:
+            if not str(top_thresh) + '_' + str(bottom_thresh) in self.annot.keys():
+                raise ValueError('Available trimming thresholds are: ' + ', '.join(list(self.annot.genes.keys())))
+        else:
+            top_thresh = list(self.annot.keys())[0].split('_')[0]
+            bottom_thresh = list(self.annot.keys())[0].split('_')[1]
+
         return self.annot[str(top_thresh) + '_' + str(bottom_thresh)].copy()
 
-    def extract_genes(self, top_thresh: int=1000, bottom_thresh: int=30):
+    def extract_genes(self, top_thresh: int=None, bottom_thresh: int=None):
         """
         Helper function to extract list from genes slot.
 
@@ -451,9 +472,21 @@ class Ontobj():
         bottom_thresh
             bottom_threshold for trimming
         """
+        # check if trim_dag function was run
+        if not self.annot:
+              raise ValueError('The trim_dag() function needs to be run first!')
+
+        # define top and borrom thresh
+        if top_thresh is not None and bottom_thresh is not None:
+            if not str(top_thresh) + '_' + str(bottom_thresh) in self.annot.keys():
+                raise ValueError('Available trimming thresholds are: ' + ', '.join(list(self.annot.genes.keys())))
+        else:
+            top_thresh = list(self.annot.keys())[0].split('_')[0]
+            bottom_thresh = list(self.annot.keys())[0].split('_')[1]
+
         return self.genes[str(top_thresh) + '_' + str(bottom_thresh)].copy()
 
-    def extract_masks(self, top_thresh: int=1000, bottom_thresh: int=30):
+    def extract_masks(self, top_thresh: int=None, bottom_thresh: int=None):
         """
         Helper function to extract masks from masks slot.
 
@@ -464,9 +497,21 @@ class Ontobj():
         bottom_thresh
             bottom_threshold for trimming
         """
+        # check if trim_dag function was run
+        if not self.annot:
+              raise ValueError('The trim_dag() function needs to be run first!')
+
+        # define top and borrom thresh
+        if top_thresh is not None and bottom_thresh is not None:
+            if not str(top_thresh) + '_' + str(bottom_thresh) in self.annot.keys():
+                raise ValueError('Available trimming thresholds are: ' + ', '.join(list(self.annot.genes.keys())))
+        else:
+            top_thresh = list(self.annot.keys())[0].split('_')[0]
+            bottom_thresh = list(self.annot.keys())[0].split('_')[1]
+
         return self.masks[str(top_thresh) + '_' + str(bottom_thresh)].copy()
     
-    def remove_link(self, term: str, gene: str, top_thresh: int=1000, bottom_thresh: int=30):
+    def remove_link(self, term: str, gene: str, top_thresh: int=None, bottom_thresh: int=None):
         """
         Modifies the masks slot by removing the link between a gene and a term.
 
@@ -481,6 +526,19 @@ class Ontobj():
         bottom_thresh
             bottom_threshold for trimming
         """
+
+        # check if trim_dag function was run
+        if not self.annot:
+              raise ValueError('The trim_dag() function needs to be run first!')
+
+        # define top and borrom thresh
+        if top_thresh is not None and bottom_thresh is not None:
+            if not str(top_thresh) + '_' + str(bottom_thresh) in self.annot.keys():
+                raise ValueError('Available trimming thresholds are: ' + ', '.join(list(self.annot.genes.keys())))
+        else:
+            top_thresh = list(self.annot.keys())[0].split('_')[0]
+            bottom_thresh = list(self.annot.keys())[0].split('_')[1]
+            
         onto_annot = self.extract_annot(top_thresh=top_thresh,
                                         bottom_thresh=bottom_thresh)
         genes = self.extract_genes(top_thresh=top_thresh,
