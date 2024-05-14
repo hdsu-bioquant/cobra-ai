@@ -109,6 +109,8 @@ class OntoVAEcpa(scOntoVAE):
         checkpoint = torch.load(modelpath + '/best_model.pt',
                             map_location = torch.device(model.device))
         model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+        with open(modelpath + '/covariate_mapping.json', 'r') as fp:
+            model.cov_dict = json.load(fp)
         return model
     
     def __init__(self, 
@@ -123,6 +125,7 @@ class OntoVAEcpa(scOntoVAE):
                  inject_covariates_class: Tunable[bool] = False,
                  drop_class: Tunable[float] = 0.2,
                  average_neurons: Tunable[bool] = False,
+                 extend_embedding: int=0,
                  **kwargs):
         super().__init__(adata, **kwargs)
 
@@ -135,7 +138,8 @@ class OntoVAEcpa(scOntoVAE):
                         'bias_class': bias_class,
                         'inject_covariates_class': inject_covariates_class,
                         'drop_class': drop_class,
-                        'average_neurons': average_neurons}
+                        'average_neurons': average_neurons,
+                        'extend_embedding': extend_embedding}
         self.params.update(class_params)
 
         
@@ -144,14 +148,17 @@ class OntoVAEcpa(scOntoVAE):
         if self.cpa_covs is None:
             raise ValueError('Please specify cpa_keys in setup_anndata_ontovae to run the model.')
 
-        self.cov_dict = {}
-        for cov in self.cpa_covs.columns:
-            self.cov_dict[cov] = dict(zip(adata.obs.loc[:,cov].tolist(), self.cpa_covs.loc[:,cov].tolist()))
+        self.cov_dict = adata.uns['cov_dict']
+        self.inject = {}
+        for key in self.cov_dict.keys():
+            self.inject[key] = False
+        self.inject_cov_dict = {}
 
         # embedding of covars
         self.covars_embeddings = nn.ModuleDict(
             {
-                key: torch.nn.Embedding(len(self.cov_dict[key]), self.latent_dim)
+                key: nn.ModuleList((torch.nn.Embedding(len(self.cov_dict[key]), self.latent_dim),
+                                   torch.nn.Embedding(extend_embedding, self.latent_dim)))
                 for key in self.cov_dict.keys()
             }
         )
@@ -176,6 +183,21 @@ class OntoVAEcpa(scOntoVAE):
         )
 
         self.to(self.device)
+
+    def configure_adata(self, adata: AnnData):
+        """
+        Configures anndata with previously unseen categories for the embedding layers.
+        
+        """
+        self.adata = adata
+
+        for cov in list(self.cov_dict.keys()):
+            new_cats = [cat for cat in adata.obs.loc[:,cov].unique() if cat not in self.cov_dict[cov].keys()]
+            if len(new_cats) > 0:
+                self.inject[cov] = True
+                self.inject_cov_dict[cov] = adata.uns['cov_dict'][cov]
+            else:
+                self.inject[cov] = False
 
     def _get_embedding(self, x: torch.tensor, cat_list: Iterable[torch.tensor], cov_list: Iterable[torch.tensor], mixup_lambda=1):
         """
@@ -213,8 +235,10 @@ class OntoVAEcpa(scOntoVAE):
         # covariate encoding
         covars_embeddings = {}
         for i, key in enumerate(self.covars_embeddings.keys()):
-            x = self.covars_embeddings[key](cov_list[i].long().squeeze())
-            x_mix = self.covars_embeddings[key](cov_list[i].long().squeeze()[index])
+            covs = cov_list[i].long().squeeze()
+            ind = 0 if not self.inject[key] else 1
+            x = self.covars_embeddings[key][ind](covs)
+            x_mix = self.covars_embeddings[key][ind](covs[index])
             x_new = mixup_lambda * x + (1. - mixup_lambda) * x_mix
             covars_embeddings[key] = x_new
 
@@ -314,7 +338,7 @@ class OntoVAEcpa(scOntoVAE):
                     adv_step: int,
                     optimizer_vae: optim.Optimizer, 
                     optimizer_adv: optim.Optimizer,
-                    pos_weights: bool, 
+                    pos_weights: bool,
                     run=None):
         """
         Parameters
@@ -588,6 +612,13 @@ class OntoVAEcpa(scOntoVAE):
             if run is not None:
                 run["model_parameters"] = self.params
 
+            # save covariate dictionary
+            with open(modelpath + '/covariate_mapping.json', 'w') as fp:
+                json.dump(self.cov_dict, fp, indent=4)
+            if np.any(np.array(list(self.inject.values()))):
+                with open(modelpath + '/injected_covariate_mapping.json', 'w') as fp:
+                    json.dump(self.inject_cov_dict, fp, indent=4)
+
         # train-val split
         train_adata, val_adata = split_adata(self.adata, 
                                              train_size = train_size,
@@ -596,8 +627,8 @@ class OntoVAEcpa(scOntoVAE):
         train_batch = self._cov_tensor(train_adata)
         val_batch = self._cov_tensor(val_adata)
 
-        train_covs = torch.tensor(train_adata.obsm['_cpa_categorical_covs'].to_numpy())
-        val_covs = torch.tensor(val_adata.obsm['_cpa_categorical_covs'].to_numpy())
+        train_covs = torch.tensor(np.array(train_adata.obsm['_cpa_categorical_covs'], dtype='int64'))
+        val_covs = torch.tensor(np.array(val_adata.obsm['_cpa_categorical_covs'], dtype='int64'))
 
         # generate dataloaders
         trainloader = FastTensorDataLoader(train_adata.X, 
@@ -644,7 +675,7 @@ class OntoVAEcpa(scOntoVAE):
                                                                                             adv_step, 
                                                                                             optimizer_vae, 
                                                                                             optimizer_adv,
-                                                                                            pos_weights, 
+                                                                                            pos_weights,
                                                                                             run)
             
             if swa_model is not None:
@@ -771,7 +802,7 @@ class OntoVAEcpa(scOntoVAE):
             adata = self.adata
 
         batch = self._cov_tensor(adata)
-        covs = torch.tensor(adata.obsm['_cpa_categorical_covs'].to_numpy())
+        covs = torch.tensor(np.array(adata.obsm['_cpa_categorical_covs'], dtype='int64'))
 
         dataloader = FastTensorDataLoader(adata.X, 
                                           batch,
