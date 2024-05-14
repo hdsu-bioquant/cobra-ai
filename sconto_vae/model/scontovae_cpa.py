@@ -109,8 +109,9 @@ class OntoVAEcpa(scOntoVAE):
         checkpoint = torch.load(modelpath + '/best_model.pt',
                             map_location = torch.device(model.device))
         model.load_state_dict(checkpoint['model_state_dict'], strict=False)
-        with open(modelpath + '/covariate_mapping.json', 'r') as fp:
-            model.cov_dict = json.load(fp)
+        if os.path.isfile(modelpath + '/covariate_mapping.json'):
+            with open(modelpath + '/covariate_mapping.json', 'r') as fp:
+                model.cov_dict = json.load(fp)
         return model
     
     def __init__(self, 
