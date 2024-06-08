@@ -621,7 +621,10 @@ class scOntoVAE(nn.Module):
             else:
                 _, _, _, result = self.forward(x, cat_list)
             result = result.to('cpu').detach().numpy()
-            if retrieve in ['latent', 'act']:
+            if retrieve == 'latent':
+                if self.root_layer_latent:
+                    result = self._average_neuronnum(result)
+            if retrieve == 'act':
                 result = self._average_neuronnum(result)
             res.append(result)
         res = np.vstack(res)
