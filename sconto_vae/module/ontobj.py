@@ -96,9 +96,7 @@ class Ontobj():
 
         # if filter_id was specified, filter the ontology terms
         if filter_id is not None:
-            term_idx = [vars(dag[term_id])['namespace'] == filter_id for term_id in term_ids]
-            valid_ids = [N for i,N in enumerate(term_ids) if term_idx[i] == True]
-            term_ids = valid_ids
+            term_ids = [t for t in term_ids if vars(dag[t])['namespace'] == filter_id]
             gene_annot = gene_annot[gene_annot.ID.isin(term_ids)]
         
         # extract information for annot file
