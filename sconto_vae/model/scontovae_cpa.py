@@ -340,6 +340,10 @@ class OntoVAEcpa(scOntoVAE):
                     optimizer_vae: optim.Optimizer, 
                     optimizer_adv: optim.Optimizer,
                     pos_weights: bool,
+                    swa_model,
+                    swa_per_epoch: bool,
+                    epoch: int,
+                    swa_start: int,
                     run=None):
         """
         Parameters
@@ -441,6 +445,14 @@ class OntoVAEcpa(scOntoVAE):
                 cov_purity.append(-knn_purity(z_dict['z_' + cov].to('cpu').detach().numpy(), vals.long().squeeze().to('cpu').detach().numpy()))
             purity += np.sum(cov_purity)
 
+            # swa averaging
+            if swa_model is not None:
+                if not swa_per_epoch:
+                    if epoch >= swa_start:
+                        swa_model.update_parameters(self)
+
+
+
         # compute avg training loss
         train_loss_vae = running_loss_vae/len(dataloader)
         train_loss_adv = running_loss_adv/len(dataloader)
@@ -534,8 +546,10 @@ class OntoVAEcpa(scOntoVAE):
                     epochs: int=300, 
                     early_stopping: bool=True,
                     patience: int=10,
-                    swa_model=None,
+                    perform_swa: bool=False,
+                    swa_per_epoch: bool=True,
                     swa_start: int=25,
+                    swa_epochs: int=10,
                     run=None):
         """
         Parameters
@@ -659,15 +673,22 @@ class OntoVAEcpa(scOntoVAE):
         optimizer_adv = optimizer(self.covars_classifiers.parameters(), lr = lr_adv)
         scheduler_adv = CosineAnnealingLR(optimizer_adv, T_max=100)
 
-        if swa_model is not None:
+        if perform_swa:
+            swa_model = AveragedModel(self)
             swa_scheduler_vae = SWALR(optimizer_vae, swa_lr = 0.05)
             swa_scheduler_adv = SWALR(optimizer_adv, swa_lr = 0.05)
+        else:
+            swa_model = None
         
         if early_stopping:
                 early_stopper = EarlyStopper(patience=patience)
         
         for epoch in range(epochs):
             print(f"Epoch {epoch+1} of {epochs}")
+
+            if perform_swa and epoch > swa_start + swa_epochs:
+                break
+
             train_epoch_loss_vae, train_epoch_loss_adv, train_knn_purity = self.train_round(trainloader, 
                                                                                             kl_coeff, 
                                                                                             adv_coeff, 
@@ -677,11 +698,19 @@ class OntoVAEcpa(scOntoVAE):
                                                                                             optimizer_vae, 
                                                                                             optimizer_adv,
                                                                                             pos_weights,
+                                                                                            swa_model,
+                                                                                            swa_per_epoch,
+                                                                                            epoch,
+                                                                                            swa_start,
                                                                                             run)
             
-            if swa_model is not None:
+            if perform_swa:
                 if epoch >= swa_start:
-                    swa_model.update_parameters(self)
+                    if swa_per_epoch:
+                        swa_model.updata_parameters(self)
+                    else:
+                        update_bn(trainloader, swa_model)
+                        self.load_state_dict(swa_model.module.state_dict())
                     swa_scheduler_vae.step()
                     swa_scheduler_adv.step()
                 else:
@@ -696,13 +725,14 @@ class OntoVAEcpa(scOntoVAE):
                                                                 adv_coeff,
                                                                 run)
             
-            if early_stopping:
+            if early_stopping and not perform_swa:
                 if early_stopper.early_stop(val_epoch_loss_vae):
                     break
-
+            if early_stopping and perform_swa:
+                if early_stopper.early_stop(val_epoch_loss_vae) and epoch < swa_start:
+                    swa_start = epoch
 
             train.report({"validation_loss": val_epoch_loss_vae})
-            
             
             if run is not None:
                 run["metrics/train/loss_vae"].log(train_epoch_loss_vae)
@@ -710,7 +740,9 @@ class OntoVAEcpa(scOntoVAE):
                 run["metrics/train/knn_purity"].log(train_knn_purity)
                 run["metrics/val/loss_vae"].log(val_epoch_loss_vae)
                 run["metrics/val/knn_purity"].log(val_knn_purity)
-                
+            
+            if perform_swa and epoch >= swa_start:
+                val_loss_min = float('inf')
             if val_epoch_loss_vae < val_loss_min and save:
                 print('New best model!')
                 torch.save({
@@ -721,10 +753,10 @@ class OntoVAEcpa(scOntoVAE):
                     'knn_purity': val_knn_purity,
                 }, modelpath + '/best_model.pt')
                 val_loss_min = val_epoch_loss_vae
-        
-        # update swa_model
-        if swa_model is not None:
-            update_bn(trainloader, swa_model)
+
+            if perform_swa and swa_per_epoch:
+                update_bn(trainloader, swa_model)
+                self.load_state_dict(swa_model.module.state_dict())
                 
 
     @torch.no_grad()
