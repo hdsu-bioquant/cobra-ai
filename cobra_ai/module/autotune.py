@@ -54,7 +54,7 @@ import warnings
 from torch import optim
 import torch.nn as nn
 
-import sconto_vae.module.utils as utils
+import cobra_ai.module.utils as utils
 
 class ModelTuner:
     """
