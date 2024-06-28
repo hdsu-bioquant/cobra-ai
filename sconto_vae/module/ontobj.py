@@ -148,7 +148,7 @@ class Ontobj():
             self.identifiers = 'Ensembl' if 'ENS' in gene_annot.iloc[0,0] else 'HGNC'
 
             # create initial annot file
-            annot = self._dag_annot(dag, gene_annot, filter_id=filter_id)
+            annot = self._dag_annot(dag, filter_id=filter_id)
             gene_annot = gene_annot[gene_annot.ID.isin(annot.ID.tolist())]
 
             # convert gene annot file to dictionary
