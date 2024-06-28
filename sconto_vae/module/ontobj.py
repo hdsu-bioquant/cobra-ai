@@ -65,7 +65,7 @@ class Ontobj():
         self.masks = {}
         self.sem_sim = {}
 
-    def _dag_annot(self, dag: dict, gene_annot: pd.DataFrame, filter_id: str=None):
+    def _dag_annot(self, dag: dict, filter_id: str=None):
 
         """
         Creates annotation dataframe from imported obo file.
@@ -74,8 +74,6 @@ class Ontobj():
         ----------
         dag
             a dag parsed from an obo file
-        gene_annot
-            pandas dataframe containing gene -> term annotation
         filter_id
             to pass if ids should be filtered, e.g.
             filter_id = 'biological_process'
@@ -97,7 +95,6 @@ class Ontobj():
         # if filter_id was specified, filter the ontology terms
         if filter_id is not None:
             term_ids = [t for t in term_ids if vars(dag[t])['namespace'] == filter_id]
-            gene_annot = gene_annot[gene_annot.ID.isin(term_ids)]
         
         # extract information for annot file
         terms = [vars(dag[term_id])['name'] for term_id in term_ids]
@@ -152,7 +149,8 @@ class Ontobj():
 
             # create initial annot file
             annot = self._dag_annot(dag, gene_annot, filter_id=filter_id)
-            
+            gene_annot = gene_annot[gene_annot.ID.isin(annot.ID.tolist())]
+
             # convert gene annot file to dictionary
             gene_term_dict = {a: b["ID"].tolist() for a,b in gene_annot.groupby("Gene")}
 
