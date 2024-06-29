@@ -706,7 +706,7 @@ class COBRA(OntoVAE):
             if perform_swa:
                 if epoch >= swa_start:
                     if swa_per_epoch:
-                        swa_model.updata_parameters(self)
+                        swa_model.update_parameters(self)
                     else:
                         update_bn(trainloader, swa_model)
                         self.load_state_dict(swa_model.module.state_dict())
