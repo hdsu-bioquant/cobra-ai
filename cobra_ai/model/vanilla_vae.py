@@ -49,8 +49,6 @@ class vanillaVAE(nn.Module):
         Whether to inject covariates in each layer (True), or just the first (False) of encoder
     drop_enc
         dropout rate in encoder
-    z_drop
-        dropout rate for latent space 
     hidden_layers_dec
         number of hidden layers in decoder
     neurons_per_layer_dec
@@ -165,8 +163,7 @@ class vanillaVAE(nn.Module):
                                 activation_fn = activation_fn_enc,
                                 bias = bias_enc,
                                 inject_covariates = inject_covariates_enc,
-                                drop = drop_enc,
-                                z_drop = z_drop)
+                                drop = drop_enc)
 
         # Decoder
         self.decoder = Decoder(in_features = self.in_features,

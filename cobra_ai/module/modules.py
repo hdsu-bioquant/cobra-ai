@@ -39,8 +39,6 @@ class Encoder(nn.Module):
         Whether to inject covariates in each layer (True), or just the first (False).
     drop
         dropout rate
-    z_drop
-        dropout rate for latent space
     """
 
     def __init__(self, 
