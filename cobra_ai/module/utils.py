@@ -195,7 +195,7 @@ def setup_anndata_vanillavae(adata: AnnData,
         adata.obs['_ontovae_categorical_covs'] = adata.obs.loc[:,categorical_covariate_keys].apply(lambda x: pd.factorize(x)[0])      
     
     if cobra_keys is not None:
-         adata.obsm['_cobra_categorical_covs'] = adata.obs.loc[:,cpa_keys].apply(lambda x: pd.factorize(x)[0])
+         adata.obsm['_cobra_categorical_covs'] = adata.obs.loc[:,cobra_keys].apply(lambda x: pd.factorize(x)[0])
     
     return adata
 
