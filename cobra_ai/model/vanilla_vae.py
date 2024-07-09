@@ -14,8 +14,8 @@ from typing import Iterable, Literal
 
 from anndata import AnnData
 
-from sconto_vae.module.modules import Encoder, Decoder
-from sconto_vae.module.utils import split_adata, FastTensorDataLoader
+from cobra_ai.module.modules import Encoder, Decoder
+from cobra_ai.module.utils import split_adata, FastTensorDataLoader
 
 
 
