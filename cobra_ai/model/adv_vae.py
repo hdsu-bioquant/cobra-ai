@@ -15,10 +15,10 @@ from typing import Iterable, Literal
 
 from anndata import AnnData
 
-from sconto_vae.model.vanilla_vae import vanillaVAE
-from sconto_vae.module.modules import Classifier
-from sconto_vae.module.utils import split_adata, FastTensorDataLoader
-from sconto_vae.module.metrics import knn_purity
+from cobra_ai.model.vanilla_vae import vanillaVAE
+from cobra_ai.module.modules import Classifier
+from cobra_ai.module.utils import split_adata, FastTensorDataLoader
+from cobra_ai.module.metrics import knn_purity
 
 from ray import train
 
@@ -738,7 +738,7 @@ class advVAE(vanillaVAE):
         
         if adata is not None:
             if '_ontovae' not in adata.uns.keys():
-                raise ValueError('Please run sconto_vae.module.utils.setup_anndata first.')
+                raise ValueError('Please run cobra_ai.module.utils.setup_anndata first.')
             pdata = adata.copy()
         else:
             pdata = self.adata.copy()
