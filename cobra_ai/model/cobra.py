@@ -144,8 +144,8 @@ class COBRA(OntoVAE):
 
         
         # set up covariates
-        self.cpa_covs = adata.obsm['_cobra_categorical_covs'] if '_cobra_categorical_covs' in adata.obsm.keys() else None
-        if self.cpa_covs is None:
+        self.cobra_covs = adata.obsm['_cobra_categorical_covs'] if '_cobra_categorical_covs' in adata.obsm.keys() else None
+        if self.cobra_covs is None:
             raise ValueError('Please specify cpa_keys in setup_anndata_ontovae to run the model.')
 
         self.cov_dict = adata.uns['cov_dict']

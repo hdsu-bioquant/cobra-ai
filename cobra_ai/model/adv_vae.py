@@ -129,13 +129,13 @@ class advVAE(vanillaVAE):
 
         
         # set up covariates
-        self.cpa_covs = adata.obsm['_cpa_categorical_covs'] if '_cpa_categorical_covs' in adata.obsm.keys() else None
-        if self.cpa_covs is None:
+        self.cobra_covs = adata.obsm['_cobra_categorical_covs'] if '_cobra_categorical_covs' in adata.obsm.keys() else None
+        if self.cobra_covs is None:
             raise ValueError('Please specify cpa_keys in setup_anndata_vanillavae to run the model.')
 
         self.cov_dict = {}
-        for cov in self.cpa_covs.columns:
-            self.cov_dict[cov] = dict(zip(adata.obs.loc[:,cov].tolist(), self.cpa_covs.loc[:,cov].tolist()))
+        for cov in self.cobra_covs.columns:
+            self.cov_dict[cov] = dict(zip(adata.obs.loc[:,cov].tolist(), self.cobra_covs.loc[:,cov].tolist()))
 
         # embedding of covars
         self.covars_embeddings = nn.ModuleDict(
@@ -550,8 +550,8 @@ class advVAE(vanillaVAE):
         train_batch = self._cov_tensor(train_adata)
         val_batch = self._cov_tensor(val_adata)
 
-        train_covs = torch.tensor(train_adata.obsm['_cpa_categorical_covs'].to_numpy())
-        val_covs = torch.tensor(val_adata.obsm['_cpa_categorical_covs'].to_numpy())
+        train_covs = torch.tensor(train_adata.obsm['_cobra_categorical_covs'].to_numpy())
+        val_covs = torch.tensor(val_adata.obsm['_cobra_categorical_covs'].to_numpy())
 
         # generate dataloaders
         trainloader = FastTensorDataLoader(train_adata.X, 
@@ -662,7 +662,7 @@ class advVAE(vanillaVAE):
             adata = self.adata
 
         batch = self._cov_tensor(adata)
-        covs = torch.tensor(adata.obsm['_cpa_categorical_covs'].to_numpy())
+        covs = torch.tensor(adata.obsm['_cobra_categorical_covs'].to_numpy())
 
         dataloader = FastTensorDataLoader(adata.X, 
                                           batch,
