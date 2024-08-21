@@ -479,7 +479,6 @@ DEFAULTS = {
         "kl_coeff": {"fn": "loguniform", "args": [1e-4, 1e-2]},
         "adv_coeff": {"fn": "loguniform", "args": [1e2, 1e4]},
         "pen_coeff": {"fn": "uniform", "args": [0, 4]},
-        "mixup_lambda": {"fn": "uniform", "args": [0.1, 1.0]},
         "adv_step": {"fn": "choice", "args": [[1, 2, 3]]},
         "batch_size": {"fn": "choice", "args": [[32, 64, 128, 256]]},
         "pos_weights": {"fn": "choice", "args": [[True, False]]},

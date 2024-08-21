@@ -199,7 +199,7 @@ class COBRA(OntoVAE):
             else:
                 self.inject[cov] = False
 
-    def _get_embedding(self, x: torch.tensor, cat_list: Iterable[torch.tensor], cov_list: Iterable[torch.tensor], mixup_lambda=1):
+    def _get_embedding(self, x: torch.tensor, cat_list: Iterable[torch.tensor], cov_list: Iterable[torch.tensor]):
         """
         Generates latent space embedding.
 
@@ -213,17 +213,7 @@ class COBRA(OntoVAE):
         cov_list
             Iterable of torch.tensors containing the covs to delineate in 
             latent space 
-        mixup_lambda
-            coefficient for adversarial training
         """
-        # data mixup for adversarial training
-        batch_size = x.size()[0]
-        if mixup_lambda  < 1:
-            index = torch.randperm(batch_size).to(x.device)
-            x = mixup_lambda * x + (1. - mixup_lambda) * x[index, :]
-        else:
-            index = torch.arange(0,batch_size).to(x.device)
-
         # encoding
         mu, log_var = self.encoder(x, cat_list)
             
@@ -238,9 +228,7 @@ class COBRA(OntoVAE):
             covs = cov_list[i].long().squeeze()
             ind = 0 if not self.inject[key] else 1
             x = self.covars_embeddings[key][ind](covs)
-            x_mix = self.covars_embeddings[key][ind](covs[index])
-            x_new = mixup_lambda * x + (1. - mixup_lambda) * x_mix
-            covars_embeddings[key] = x_new
+            covars_embeddings[key] = x
 
         # create different z's
         z_cov = {}
@@ -254,7 +242,7 @@ class COBRA(OntoVAE):
 
         return z_dict, mu, log_var
   
-    def forward(self, x: torch.tensor, cat_list: Iterable[torch.tensor], cov_list: Iterable[torch.tensor], mixup_lambda: float):
+    def forward(self, x: torch.tensor, cat_list: Iterable[torch.tensor], cov_list: Iterable[torch.tensor]):
         """
         Forward computation on minibatch of samples.
         
@@ -268,11 +256,9 @@ class COBRA(OntoVAE):
         cov_list
             Iterable of torch.tensors containing the covs to delineate in 
             latent space 
-        mixup_lambda
-            coefficient for adversarial training
         """
         # inference
-        zdict, mu, log_var = self._get_embedding(x, cat_list, cov_list, mixup_lambda)
+        zdict, mu, log_var = self._get_embedding(x, cat_list, cov_list)
 
         # decoding
         reconstruction = self.decoder(zdict['z_total'], cat_list)
@@ -334,7 +320,6 @@ class COBRA(OntoVAE):
                     kl_coeff: float, 
                     adv_coeff: float,
                     pen_coeff: float,
-                    mixup_lambda: float,
                     adv_step: int,
                     optimizer_vae: optim.Optimizer, 
                     optimizer_adv: optim.Optimizer,
@@ -355,8 +340,6 @@ class COBRA(OntoVAE):
             coefficient for weighting classifier
         pen_coeff
             coefficient for weighting gradient penalty
-        mixup_lambda
-            coefficient for adversarial training
         adv_step:
             after how many minibatches the discriminators should be updated
         optimizer_vae
@@ -390,7 +373,7 @@ class COBRA(OntoVAE):
             optimizer_vae.zero_grad()
 
             # forward step generator
-            z_dict, mu, logvar, reconstruction = self.forward(data, cat_list, cov_list, mixup_lambda)
+            z_dict, mu, logvar, reconstruction = self.forward(data, cat_list, cov_list)
             z_basal = z_dict["z_basal"]
             covars_pred = self.adv_forward(z_basal, cat_list)
             vae_loss = self.vae_loss(reconstruction, mu, logvar, data, kl_coeff, run=run)
@@ -481,7 +464,6 @@ class COBRA(OntoVAE):
         """
         # set to eval mode
         self.eval()
-        #mixup_lambda=0
 
         # initialize running losses
         running_loss_vae = 0.0
@@ -498,7 +480,7 @@ class COBRA(OntoVAE):
             cov_list = torch.split(minibatch[2].T.to(self.device), 1)
 
             # forward step generator
-            z_dict, mu, logvar, reconstruction = self.forward(data, cat_list, cov_list, mixup_lambda=1)
+            z_dict, mu, logvar, reconstruction = self.forward(data, cat_list, cov_list)
             z_basal = z_dict["z_basal"]
             covars_pred = self.adv_forward(z_basal, cat_list)
             vae_loss = self.vae_loss(reconstruction, mu, logvar, data, kl_coeff, run=run)
@@ -536,7 +518,6 @@ class COBRA(OntoVAE):
                     kl_coeff: Tunable[float]=1e-3, 
                     adv_coeff: Tunable[float]=1e3,
                     pen_coeff: Tunable[float]=2.0,
-                    mixup_lambda: Tunable[float]=1,
                     adv_step: Tunable[int]=1,
                     batch_size: Tunable[int]=128, 
                     optimizer: Tunable[optim.Optimizer] = optim.AdamW,
@@ -571,8 +552,6 @@ class COBRA(OntoVAE):
             coefficient for weighting classifier
         pen_coeff
             coefficient for weighting gradient penalty
-        mixup_lambda
-            coefficient for adversarial training
         adv_step
             after how many minibatches the discriminators should be updated
         batch_size
@@ -603,7 +582,6 @@ class COBRA(OntoVAE):
                             'kl_coeff': kl_coeff,
                             'adv_coeff': adv_coeff,
                             'pen_coeff': pen_coeff,
-                            'mixup_lambda': mixup_lambda,
                             'adv_step': adv_step,
                             'batch_size': batch_size,
                             'optimizer': str(optimizer).split("'")[1],
@@ -692,7 +670,6 @@ class COBRA(OntoVAE):
                                                                                             kl_coeff, 
                                                                                             adv_coeff, 
                                                                                             pen_coeff, 
-                                                                                            mixup_lambda, 
                                                                                             adv_step, 
                                                                                             optimizer_vae, 
                                                                                             optimizer_adv,
