@@ -125,7 +125,6 @@ class COBRA(OntoVAE):
                  inject_covariates_class: Tunable[bool] = False,
                  drop_class: Tunable[float] = 0.2,
                  average_neurons: Tunable[bool] = False,
-                 extend_embedding: int=0,
                  **kwargs):
         super().__init__(adata, **kwargs)
 
@@ -138,8 +137,7 @@ class COBRA(OntoVAE):
                         'bias_class': bias_class,
                         'inject_covariates_class': inject_covariates_class,
                         'drop_class': drop_class,
-                        'average_neurons': average_neurons,
-                        'extend_embedding': extend_embedding}
+                        'average_neurons': average_neurons}
         self.params.update(class_params)
 
         
@@ -151,16 +149,11 @@ class COBRA(OntoVAE):
         self.cov_dict = adata.uns['cov_dict']
         self.comb_cov_dict = adata.uns['comb_cov_dict']
         self.cov_type = adata.uns['cov_type']
-        self.inject = {}
-        for key in self.cobra_covs.columns:
-            self.inject[key] = False
-        self.inject_cov_dict = {}
 
         # embedding of covars
         self.covars_embeddings = nn.ModuleDict(
             {
-                key: nn.ModuleList((torch.nn.Embedding(len(self.cov_dict[key]) if self.cov_type[key] == 'distinct' else len(self.comb_cov_dict[key]['embedding']), self.latent_dim, padding_idx=0),
-                                   torch.nn.Embedding(extend_embedding, self.latent_dim)))
+                key: torch.nn.Embedding(len(self.cov_dict[key]) if self.cov_type[key] == 'distinct' else len(self.comb_cov_dict[key]['embedding']), self.latent_dim, padding_idx=0)
                 for key in self.cobra_covs.columns
             }
         )
@@ -227,15 +220,14 @@ class COBRA(OntoVAE):
         # covariate encoding
         covars_embeddings = {}
         for i, key in enumerate(self.covars_embeddings.keys()):
-            ind = 0 if not self.inject[key] else 1
             covs = cov_list[i].long().squeeze()
             if self.cov_type[key] == 'distinct':
-                x = self.covars_embeddings[key][ind](covs)
+                x = self.covars_embeddings[key](covs)
             else:
                 # for combinatorial covariates, we sum up the embeddings of the different categories the minibatch of samples belong to
                 mapping = self.comb_cov_dict[key]['mapping']
                 num = len(mapping[0])
-                x = torch.sum(torch.stack([self.covars_embeddings[key][ind](ten) for ten in [torch.LongTensor([mapping[int(e)][i] for e in covs]).to(self.device) for i in np.arange(num)]]), dim=0)
+                x = torch.sum(torch.stack([self.covars_embeddings[key](ten) for ten in [torch.LongTensor([mapping[int(e)][i] for e in covs]).to(self.device) for i in np.arange(num)]]), dim=0)
             covars_embeddings[key] = x
 
         # create different z's
