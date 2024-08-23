@@ -650,9 +650,6 @@ class COBRA(OntoVAE):
             # save covariate dictionary
             with open(modelpath + '/covariate_mapping.json', 'w') as fp:
                 json.dump(self.cov_dict, fp, indent=4)
-            if np.any(np.array(list(self.inject.values()))):
-                with open(modelpath + '/injected_covariate_mapping.json', 'w') as fp:
-                    json.dump(self.inject_cov_dict, fp, indent=4)
 
         # train-val split
         train_adata, val_adata = split_adata(self.adata, 
