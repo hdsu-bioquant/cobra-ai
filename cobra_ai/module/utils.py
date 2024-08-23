@@ -28,6 +28,7 @@ def setup_anndata_ontovae(adata: AnnData,
                 categorical_covariate_keys: Optional[list[str]] = None,
                 #class_key: Optional[str] = None,
                 cobra_keys: Optional[list[str]] = None, 
+                control_group: Optional[list[str]] = None,
                 layer: Optional[str] = None):
     
     """
@@ -53,6 +54,8 @@ def setup_anndata_ontovae(adata: AnnData,
             Observation to use as class (only for OntoVAE + classifier)
         cobra_keys
             Observations to use for disentanglement of latent space (only for COBRA)
+        control_group
+            for combinatorial cobra_keys, specifies the control class
         layer
             layer of AnnData containing the data
 
@@ -125,18 +128,49 @@ def setup_anndata_ontovae(adata: AnnData,
     
     if cobra_keys is not None:
         cov_dict = {}
+        comb_cov_dict = {} 
+        cov_type = {}
         mappings = []
+        i = 0
         for k in cobra_keys:
-            classes = ndata.obs.loc[:,k].unique()
+            cov_type[k] = 'distinct'
+            classes = list(ndata.obs.loc[:,k].unique())
+            if np.any(['+' in s for s in classes]):
+                if not control_group:
+                    raise ValueError('Please provide the control group!')
+                ctrl_group = control_group[i]
+                cov_type[k] = 'combinatorial'
+                classes = [s.split('+') for s in classes]
+                classes = list(set([j for i in classes for j in i]))
+                classes.insert(0, classes.pop(classes.index(ctrl_group)))
+                i = i+1
+            else:
+                classes = ['<DUM>'] + classes
             mapping = dict(zip(classes, np.arange(len(classes))))
             mapping = {key: int(value) for key, value in mapping.items()}
-            cov_dict[k] = mapping
-            mappings.append(ndata.obs.loc[:,k].map(cov_dict[k]))
+            if cov_type[k] == 'combinatorial':
+                combos = ndata.obs.loc[:,k].unique()
+                comb_cov_dict[k] = {}
+                comb_cov_dict[k]['embedding'] = mapping
+                comb_cov_dict[k]['classifier'] = dict(zip(combos, np.arange(len(combos))))
+                comb_cov_dict[k]['mapping'] = {}
+                for cs in combos:
+                     comb_cov_dict[k]['mapping'][comb_cov_dict[k]['classifier'][cs]] = [comb_cov_dict[k]['embedding'][c] for c in cs.split('+')]
+                comb_values = [len(v) for v in comb_cov_dict[k]['mapping'].values()]
+                max_comb = np.max(comb_values)
+                to_pad = max_comb - comb_values
+                new_values = [list(comb_cov_dict[k]['mapping'].values())[i] + [0] * to_pad[i] for i in np.arange(len(list(comb_cov_dict[k]['mapping'].values())))]
+                comb_cov_dict[k]['mapping'] = dict(zip(list(comb_cov_dict[k]['mapping'].keys()), new_values))
+                mappings.append(ndata.obs.loc[:,k].map(comb_cov_dict[k]['classifier']))
+            else:
+                cov_dict[k] = mapping
+                mappings.append(ndata.obs.loc[:,k].map(cov_dict[k]))
         ndata.uns['cov_dict'] = cov_dict
+        ndata.uns['comb_cov_dict'] = comb_cov_dict
+        ndata.uns['cov_type'] = cov_type
         ndata.obsm['_cobra_categorical_covs'] = pd.concat(mappings, axis=1)
 
     return ndata
-
 
 def setup_anndata_vanillavae(adata: AnnData,
                 batch_key: Optional[str] = None,

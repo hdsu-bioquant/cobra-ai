@@ -146,20 +146,22 @@ class COBRA(OntoVAE):
         # set up covariates
         self.cobra_covs = adata.obsm['_cobra_categorical_covs'] if '_cobra_categorical_covs' in adata.obsm.keys() else None
         if self.cobra_covs is None:
-            raise ValueError('Please specify cpa_keys in setup_anndata_ontovae to run the model.')
+            raise ValueError('Please specify cobra_keys in setup_anndata_ontovae to run the model.')
 
         self.cov_dict = adata.uns['cov_dict']
+        self.comb_cov_dict = adata.uns['comb_cov_dict']
+        self.cov_type = adata.uns['cov_type']
         self.inject = {}
-        for key in self.cov_dict.keys():
+        for key in self.cobra_covs.columns:
             self.inject[key] = False
         self.inject_cov_dict = {}
 
         # embedding of covars
         self.covars_embeddings = nn.ModuleDict(
             {
-                key: nn.ModuleList((torch.nn.Embedding(len(self.cov_dict[key]), self.latent_dim),
+                key: nn.ModuleList((torch.nn.Embedding(len(self.cov_dict[key]) if self.cov_type[key] == 'distinct' else len(self.comb_cov_dict[key]['embedding']), self.latent_dim, padding_idx=0),
                                    torch.nn.Embedding(extend_embedding, self.latent_dim)))
-                for key in self.cov_dict.keys()
+                for key in self.cobra_covs.columns
             }
         )
         
@@ -167,7 +169,7 @@ class COBRA(OntoVAE):
         self.covars_classifiers = nn.ModuleDict(
             {
                 key: Classifier(in_features = self.latent_dim,
-                                n_classes = len(self.cov_dict[key]),
+                                n_classes = len(self.cov_dict[key]) if self.cov_type[key] == 'distinct' else len(self.comb_cov_dict[key]['classifier']),
                                 n_cat_list = self.n_cat_list,
                                 hidden_layers = hidden_layers_class,
                                 neurons_per_layer = neurons_per_class_layer,
@@ -178,7 +180,7 @@ class COBRA(OntoVAE):
                                 bias = bias_class,
                                 inject_covariates = inject_covariates_class,
                                 drop = drop_class)
-                for key in self.cov_dict.keys()
+                for key in self.cobra_covs.columns
             }
         )
 
@@ -225,9 +227,15 @@ class COBRA(OntoVAE):
         # covariate encoding
         covars_embeddings = {}
         for i, key in enumerate(self.covars_embeddings.keys()):
-            covs = cov_list[i].long().squeeze()
             ind = 0 if not self.inject[key] else 1
-            x = self.covars_embeddings[key][ind](covs)
+            covs = cov_list[i].long().squeeze()
+            if self.cov_type[key] == 'distinct':
+                x = self.covars_embeddings[key][ind](covs)
+            else:
+                # for combinatorial covariates, we sum up the embeddings of the different categories the minibatch of samples belong to
+                mapping = self.comb_cov_dict[key]['mapping']
+                num = len(mapping[0])
+                x = torch.sum(torch.stack([self.covars_embeddings[key][ind](ten) for ten in [torch.LongTensor([mapping[int(e)][i] for e in covs]).to(self.device) for i in np.arange(num)]]), dim=0)
             covars_embeddings[key] = x
 
         # create different z's
@@ -379,7 +387,7 @@ class COBRA(OntoVAE):
             vae_loss = self.vae_loss(reconstruction, mu, logvar, data, kl_coeff, run=run)
             adv_loss = 0.0
             for i, vals in enumerate(cov_list):
-                cov = list(self.cov_dict.keys())[i]
+                cov = list(self.cobra_covs.columns)[i]
                 cov_loss = self.clf_loss(covars_pred[cov], vals.long().squeeze(), cov=cov, run=run)
                 adv_loss += cov_loss
             loss = vae_loss - adv_coeff * adv_loss
@@ -409,7 +417,7 @@ class COBRA(OntoVAE):
                 covars_pred = self.adv_forward(z_basal.detach(), cat_list, compute_penalty=True)
                 adv_loss = 0.0
                 for i, vals in enumerate(cov_list):
-                    cov = list(self.cov_dict.keys())[i]
+                    cov = list(self.cobra_covs.columns)[i]
                     cov_loss = self.clf_loss(covars_pred[cov], vals.long().squeeze(), cov=cov, run=run)
                     adv_loss += cov_loss
                 loss = adv_loss + pen_coeff * covars_pred['penalty']
@@ -422,7 +430,7 @@ class COBRA(OntoVAE):
             # compute KNN purity
             cov_purity = []
             for i, vals in enumerate(cov_list):
-                cov = list(self.cov_dict.keys())[i]
+                cov = list(self.cobra_covs.columns)[i]
                 cov_purity.append(knn_purity(z_basal.to('cpu').detach().numpy(), vals.long().squeeze().to('cpu').detach().numpy()))
                 cov_purity.append(-knn_purity(z_dict['z_' + cov].to('cpu').detach().numpy(), vals.long().squeeze().to('cpu').detach().numpy()))
             purity += np.sum(cov_purity)
@@ -486,7 +494,7 @@ class COBRA(OntoVAE):
             vae_loss = self.vae_loss(reconstruction, mu, logvar, data, kl_coeff, run=run)
             adv_loss = 0.0
             for i, vals in enumerate(cov_list):
-                cov = list(self.cov_dict.keys())[i]
+                cov = list(self.cobra_covs.columns)[i]
                 cov_loss = self.clf_loss(covars_pred[cov], vals.long().squeeze(), cov=cov, run=run)
                 adv_loss += cov_loss
             loss = vae_loss - adv_coeff * adv_loss
@@ -495,7 +503,7 @@ class COBRA(OntoVAE):
             # compute KNN purity
             cov_purity = []
             for i, vals in enumerate(cov_list):
-                cov = list(self.cov_dict.keys())[i]
+                cov = list(self.cobra_covs.columns)[i]
                 cov_purity.append(knn_purity(z_basal.to('cpu').detach().numpy(), vals.long().squeeze().to('cpu').detach().numpy()))
                 cov_purity.append(-knn_purity(z_dict['z_' + cov].to('cpu').detach().numpy(), vals.long().squeeze().to('cpu').detach().numpy()))
             purity += np.sum(cov_purity)
