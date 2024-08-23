@@ -647,7 +647,7 @@ class COBRA(OntoVAE):
                 json.dump(self.params, fp, indent=4)
 
             if run is not None:
-                run["model_parameters"] = self.params
+                run["model_parameters"] = {k: v for k,v in self.params.items() if k != 'cov_dict'}
 
             # save covariate dictionary
             with open(modelpath + '/covariate_mapping.json', 'w') as fp:
