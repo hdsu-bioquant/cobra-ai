@@ -142,7 +142,7 @@ class COBRA(OntoVAE):
 
         
         # set up covariates
-        self.cobra_covs = adata.obsm['_cobra_categorical_covs'] if '_cobra_categorical_covs' in adata.obsm.keys() else None
+        self.cobra_covs = adata.obsm['_cobra_categorical_covs'].columns if '_cobra_categorical_covs' in adata.obsm.keys() else None
         if self.cobra_covs is None:
             raise ValueError('Please specify cobra_keys in setup_anndata_ontovae to run the model.')
 
@@ -154,7 +154,7 @@ class COBRA(OntoVAE):
         self.covars_embeddings = nn.ModuleDict(
             {
                 key: torch.nn.Embedding(len(self.cov_dict[key]) if self.cov_type[key] == 'distinct' else len(self.comb_cov_dict[key]['embedding']), self.latent_dim, padding_idx=0)
-                for key in self.cobra_covs.columns
+                for key in self.cobra_covs
             }
         )
         
@@ -173,7 +173,7 @@ class COBRA(OntoVAE):
                                 bias = bias_class,
                                 inject_covariates = inject_covariates_class,
                                 drop = drop_class)
-                for key in self.cobra_covs.columns
+                for key in self.cobra_covs
             }
         )
 
@@ -189,7 +189,7 @@ class COBRA(OntoVAE):
             raise ValueError('Please run cobra_ai.module.utils.setup_anndata_ontovae first.')
         
         # Check if adata contains all neccessary covariates
-        cobra_keys = list(self.cobra_covs.columns)
+        cobra_keys = list(self.cobra_covs)
 
         if np.any([c not in adata.obs.columns for c in cobra_keys]):
             raise ValueError('Dataset does not contain all covariates.')
@@ -209,7 +209,7 @@ class COBRA(OntoVAE):
         Configures anndata to match the existing covariate mappings.
         
         """
-        cobra_keys = list(self.cobra_covs.columns)
+        cobra_keys = list(self.cobra_covs)
 
         mappings = []
         for k in cobra_keys:
@@ -420,7 +420,7 @@ class COBRA(OntoVAE):
             vae_loss = self.vae_loss(reconstruction, mu, logvar, data, kl_coeff, run=run)
             adv_loss = 0.0
             for i, vals in enumerate(cov_list):
-                cov = list(self.cobra_covs.columns)[i]
+                cov = list(self.cobra_covs)[i]
                 cov_loss = self.clf_loss(covars_pred[cov], vals.long().squeeze(), cov=cov, run=run)
                 adv_loss += cov_loss
             loss = vae_loss - adv_coeff * adv_loss
@@ -450,7 +450,7 @@ class COBRA(OntoVAE):
                 covars_pred = self.adv_forward(z_basal.detach(), cat_list, compute_penalty=True)
                 adv_loss = 0.0
                 for i, vals in enumerate(cov_list):
-                    cov = list(self.cobra_covs.columns)[i]
+                    cov = list(self.cobra_covs)[i]
                     cov_loss = self.clf_loss(covars_pred[cov], vals.long().squeeze(), cov=cov, run=run)
                     adv_loss += cov_loss
                 loss = adv_loss + pen_coeff * covars_pred['penalty']
@@ -463,7 +463,7 @@ class COBRA(OntoVAE):
             # compute KNN purity
             cov_purity = []
             for i, vals in enumerate(cov_list):
-                cov = list(self.cobra_covs.columns)[i]
+                cov = list(self.cobra_covs)[i]
                 cov_purity.append(knn_purity(z_basal.to('cpu').detach().numpy(), vals.long().squeeze().to('cpu').detach().numpy()))
                 cov_purity.append(-knn_purity(z_dict['z_' + cov].to('cpu').detach().numpy(), vals.long().squeeze().to('cpu').detach().numpy()))
             purity += np.sum(cov_purity)
@@ -527,7 +527,7 @@ class COBRA(OntoVAE):
             vae_loss = self.vae_loss(reconstruction, mu, logvar, data, kl_coeff, run=run)
             adv_loss = 0.0
             for i, vals in enumerate(cov_list):
-                cov = list(self.cobra_covs.columns)[i]
+                cov = list(self.cobra_covs)[i]
                 cov_loss = self.clf_loss(covars_pred[cov], vals.long().squeeze(), cov=cov, run=run)
                 adv_loss += cov_loss
             loss = vae_loss - adv_coeff * adv_loss
@@ -536,7 +536,7 @@ class COBRA(OntoVAE):
             # compute KNN purity
             cov_purity = []
             for i, vals in enumerate(cov_list):
-                cov = list(self.cobra_covs.columns)[i]
+                cov = list(self.cobra_covs)[i]
                 cov_purity.append(knn_purity(z_basal.to('cpu').detach().numpy(), vals.long().squeeze().to('cpu').detach().numpy()))
                 cov_purity.append(-knn_purity(z_dict['z_' + cov].to('cpu').detach().numpy(), vals.long().squeeze().to('cpu').detach().numpy()))
             purity += np.sum(cov_purity)
