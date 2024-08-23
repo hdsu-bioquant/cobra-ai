@@ -104,6 +104,9 @@ class COBRA(OntoVAE):
             params['activation_fn_dec'] = eval(params['activation_fn_dec'])
         if params['activation_fn_class'] is not None:
             params['activation_fn_class'] = eval(params['activation_fn_class'])
+        if params['cov_dict'] is not None:
+            adata.uns['cov_dict'] = params['cov_dict']
+            adata.uns['cov_type'] = params['cov_type']
         model = cls(adata, **params) 
         checkpoint = torch.load(modelpath + '/best_model.pt',
                             map_location = torch.device(model.device))
@@ -144,6 +147,10 @@ class COBRA(OntoVAE):
         self.cov_dict = adata.uns['cov_dict']
         self.cov_type = adata.uns['cov_type']
         self.cobra_covs = list(self.cov_dict.keys())      
+
+        self.params.update({'cobra_keys': self.cobra_covs})
+        self.params.update({'cov_type': self.cov_type})
+        self.params.update({'cov_dict': self.cov_dict})
 
         # embedding of covars
         self.covars_embeddings = nn.ModuleDict(
