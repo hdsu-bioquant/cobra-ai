@@ -150,23 +150,22 @@ def setup_anndata_ontovae(adata: AnnData,
             mapping = {key: int(value) for key, value in mapping.items()}
             if cov_type[k] == 'combinatorial':
                 combos = ndata.obs.loc[:,k].unique()
-                comb_cov_dict[k] = {}
-                comb_cov_dict[k]['embedding'] = mapping
-                comb_cov_dict[k]['classifier'] = dict(zip(combos, np.arange(len(combos))))
-                comb_cov_dict[k]['mapping'] = {}
+                cov_dict[k] = {}
+                cov_dict[k]['embedding'] = mapping
+                cov_dict[k]['classifier'] = dict(zip(combos, np.arange(len(combos))))
+                cov_dict[k]['mapping'] = {}
                 for cs in combos:
-                     comb_cov_dict[k]['mapping'][comb_cov_dict[k]['classifier'][cs]] = [comb_cov_dict[k]['embedding'][c] for c in cs.split('+')]
-                comb_values = [len(v) for v in comb_cov_dict[k]['mapping'].values()]
+                     cov_dict[k]['mapping'][cov_dict[k]['classifier'][cs]] = [cov_dict[k]['embedding'][c] for c in cs.split('+')]
+                comb_values = [len(v) for v in cov_dict[k]['mapping'].values()]
                 max_comb = np.max(comb_values)
                 to_pad = max_comb - comb_values
-                new_values = [list(comb_cov_dict[k]['mapping'].values())[i] + [0] * to_pad[i] for i in np.arange(len(list(comb_cov_dict[k]['mapping'].values())))]
-                comb_cov_dict[k]['mapping'] = dict(zip(list(comb_cov_dict[k]['mapping'].keys()), new_values))
-                mappings.append(ndata.obs.loc[:,k].map(comb_cov_dict[k]['classifier']))
+                new_values = [list(cov_dict[k]['mapping'].values())[i] + [0] * to_pad[i] for i in np.arange(len(list(cov_dict[k]['mapping'].values())))]
+                cov_dict[k]['mapping'] = dict(zip(list(cov_dict[k]['mapping'].keys()), new_values))
+                mappings.append(ndata.obs.loc[:,k].map(cov_dict[k]['classifier']))
             else:
                 cov_dict[k] = mapping
                 mappings.append(ndata.obs.loc[:,k].map(cov_dict[k]))
         ndata.uns['cov_dict'] = cov_dict
-        ndata.uns['comb_cov_dict'] = comb_cov_dict
         ndata.uns['cov_type'] = cov_type
         ndata.obsm['_cobra_categorical_covs'] = pd.concat(mappings, axis=1)
 

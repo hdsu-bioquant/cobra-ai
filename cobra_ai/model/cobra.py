@@ -140,20 +140,15 @@ class COBRA(OntoVAE):
                         'average_neurons': average_neurons}
         self.params.update(class_params)
 
-        
-        # set up covariates
-        self.cobra_covs = adata.obsm['_cobra_categorical_covs'].columns if '_cobra_categorical_covs' in adata.obsm.keys() else None
-        if self.cobra_covs is None:
-            raise ValueError('Please specify cobra_keys in setup_anndata_ontovae to run the model.')
 
         self.cov_dict = adata.uns['cov_dict']
-        self.comb_cov_dict = adata.uns['comb_cov_dict']
         self.cov_type = adata.uns['cov_type']
+        self.cobra_covs = list(self.cov_dict.keys())      
 
         # embedding of covars
         self.covars_embeddings = nn.ModuleDict(
             {
-                key: torch.nn.Embedding(len(self.cov_dict[key]) if self.cov_type[key] == 'distinct' else len(self.comb_cov_dict[key]['embedding']), self.latent_dim, padding_idx=0)
+                key: torch.nn.Embedding(len(self.cov_dict[key]) if self.cov_type[key] == 'distinct' else len(self.cov_dict[key]['embedding']), self.latent_dim, padding_idx=0)
                 for key in self.cobra_covs
             }
         )
@@ -162,7 +157,7 @@ class COBRA(OntoVAE):
         self.covars_classifiers = nn.ModuleDict(
             {
                 key: Classifier(in_features = self.latent_dim,
-                                n_classes = len(self.cov_dict[key]) if self.cov_type[key] == 'distinct' else len(self.comb_cov_dict[key]['classifier']),
+                                n_classes = len(self.cov_dict[key]) if self.cov_type[key] == 'distinct' else len(self.cov_dict[key]['classifier']),
                                 n_cat_list = self.n_cat_list,
                                 hidden_layers = hidden_layers_class,
                                 neurons_per_layer = neurons_per_class_layer,
@@ -198,7 +193,7 @@ class COBRA(OntoVAE):
         configure=False
         for k in cobra_keys:
             if self.cov_type[k] == 'combinatorial':
-                new_cond = [c for c in adata.obs.loc[:,k].unique() if c not in self.comb_cov_dict[k]['classifier'].keys()]
+                new_cond = [c for c in adata.obs.loc[:,k].unique() if c not in self.cov_dict[k]['classifier'].keys()]
                 if len(new_cond) > 0:
                     configure=True
         
@@ -216,21 +211,21 @@ class COBRA(OntoVAE):
             if self.cov_type[k] == 'distinct':
                 mappings.append(adata.obs.loc[:,k].map(self.cov_dict[k]))
             else:
-                new_cond = [c for c in adata.obs.loc[:,k].unique() if c not in self.comb_cov_dict[k]['classifier'].keys()]
+                new_cond = [c for c in adata.obs.loc[:,k].unique() if c not in self.cov_dict[k]['classifier'].keys()]
                 if len(new_cond) > 0:
-                    element_num = len(self.comb_cov_dict[k]['classifier'])
-                    self.comb_cov_dict[k]['classifier'].update({new_cond[i]: element_num + i for i in range(len(new_cond))})
-                    self.comb_cov_dict[k]['mapping'] = {}
-                    combos = list(self.comb_cov_dict[k]['classifier'].keys())
+                    element_num = len(self.cov_dict[k]['classifier'])
+                    self.cov_dict[k]['classifier'].update({new_cond[i]: element_num + i for i in range(len(new_cond))})
+                    self.cov_dict[k]['mapping'] = {}
+                    combos = list(self.cov_dict[k]['classifier'].keys())
                     for cs in combos:
-                        self.comb_cov_dict[k]['mapping'][self.comb_cov_dict[k]['classifier'][cs]] = [self.comb_cov_dict[k]['embedding'][c] for c in cs.split('+')]
-                    comb_values = [len(v) for v in self.comb_cov_dict[k]['mapping'].values()]
+                        self.cov_dict[k]['mapping'][self.cov_dict[k]['classifier'][cs]] = [self.cov_dict[k]['embedding'][c] for c in cs.split('+')]
+                    comb_values = [len(v) for v in self.cov_dict[k]['mapping'].values()]
                     max_comb = np.max(comb_values)
                     to_pad = max_comb - comb_values
-                    new_values = [list(self.comb_cov_dict[k]['mapping'].values())[i] + [0] * to_pad[i] for i in np.arange(len(list(self.comb_cov_dict[k]['mapping'].values())))]
-                    self.comb_cov_dict[k]['mapping'] = dict(zip(list(self.comb_cov_dict[k]['mapping'].keys()), new_values))
-                    adata.uns['comb_cov_dict'][k] = self.comb_cov_dict[k]
-                mappings.append(adata.obs.loc[:,k].map(self.comb_cov_dict[k]['classifier']))
+                    new_values = [list(self.cov_dict[k]['mapping'].values())[i] + [0] * to_pad[i] for i in np.arange(len(list(self.cov_dict[k]['mapping'].values())))]
+                    self.cov_dict[k]['mapping'] = dict(zip(list(self.cov_dict[k]['mapping'].keys()), new_values))
+                    adata.uns['cov_dict'][k] = self.cov_dict[k]
+                mappings.append(adata.obs.loc[:,k].map(self.cov_dict[k]['classifier']))
         
         adata.obsm['_cobra_categorical_covs'] = pd.concat(mappings, axis=1)
             
@@ -266,7 +261,7 @@ class COBRA(OntoVAE):
                 x = self.covars_embeddings[key](covs)
             else:
                 # for combinatorial covariates, we sum up the embeddings of the different categories the minibatch of samples belong to
-                mapping = self.comb_cov_dict[key]['mapping']
+                mapping = self.cov_dict[key]['mapping']
                 num = len(mapping[0])
                 x = torch.sum(torch.stack([self.covars_embeddings[key](ten) for ten in [torch.LongTensor([mapping[int(e)][i] for e in covs]).to(self.device) for i in np.arange(num)]]), dim=0)
             covars_embeddings[key] = x
