@@ -181,18 +181,41 @@ class COBRA(OntoVAE):
 
     def configure_adata(self, adata: AnnData):
         """
-        Configures anndata with previously unseen categories for the embedding layers.
+        Configures anndata to match the existing covariate mappings.
         
         """
-        self.adata = adata
+        if '_ontovae' not in adata.uns.keys():
+            raise ValueError('Please run cobra_ai.module.utils.setup_anndata_ontovae first.')
 
-        for cov in list(self.cov_dict.keys()):
-            new_cats = [cat for cat in adata.obs.loc[:,cov].unique() if cat not in self.cov_dict[cov].keys()]
-            if len(new_cats) > 0:
-                self.inject[cov] = True
-                self.inject_cov_dict[cov] = adata.uns['cov_dict'][cov]
+        cobra_keys = list(self.cobra_covs.columns)
+
+        if np.any([c not in adata.obs.columns for c in cobra_keys]):
+            raise ValueError('Dataset does not contain all covariates.')
+
+        mappings = []
+        for k in cobra_keys:
+            if self.cov_type[k] == 'distinct':
+                mappings.append(adata.obs.loc[:,k].map(self.cov_dict[k]))
             else:
-                self.inject[cov] = False
+                new_cond = [c for c in adata.obs.loc[:,k].unique() if c not in self.comb_cov_dict[k]['classifier'].keys()]
+                if len(new_cond) > 0:
+                    element_num = len(self.comb_cov_dict[k]['classifier'])
+                    self.comb_cov_dict[k]['classifier'].update({new_cond[i]: element_num + i for i in range(len(new_cond))})
+                    self.comb_cov_dict[k]['mapping'] = {}
+                    combos = list(self.comb_cov_dict[k]['classifier'].keys())
+                    for cs in combos:
+                        self.comb_cov_dict[k]['mapping'][self.comb_cov_dict[k]['classifier'][cs]] = [self.comb_cov_dict[k]['embedding'][c] for c in cs.split('+')]
+                    comb_values = [len(v) for v in self.comb_cov_dict[k]['mapping'].values()]
+                    max_comb = np.max(comb_values)
+                    to_pad = max_comb - comb_values
+                    new_values = [list(self.comb_cov_dict[k]['mapping'].values())[i] + [0] * to_pad[i] for i in np.arange(len(list(self.comb_cov_dict[k]['mapping'].values())))]
+                    self.comb_cov_dict[k]['mapping'] = dict(zip(list(self.comb_cov_dict[k]['mapping'].keys()), new_values))
+                    adata.uns['comb_cov_dict'][k] = self.comb_cov_dict[k]
+                mappings.append(adata.obs.loc[:,k].map(self.comb_cov_dict[k]['classifier']))
+        
+        adata.obsm['_cobra_categorical_covs'] = pd.concat(mappings, axis=1)
+        self.adata = adata
+    
 
     def _get_embedding(self, x: torch.tensor, cat_list: Iterable[torch.tensor], cov_list: Iterable[torch.tensor]):
         """
