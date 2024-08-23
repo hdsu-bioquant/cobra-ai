@@ -179,18 +179,37 @@ class COBRA(OntoVAE):
 
         self.to(self.device)
 
-    def configure_adata(self, adata: AnnData):
+    def _check_adata(self, adata: AnnData):
         """
-        Configures anndata to match the existing covariate mappings.
-        
+        Checks if adata containes previously unseen categories
         """
+
+        # Check if adata was processed with setup function
         if '_ontovae' not in adata.uns.keys():
             raise ValueError('Please run cobra_ai.module.utils.setup_anndata_ontovae first.')
-
+        
+        # Check if adata contains all neccessary covariates
         cobra_keys = list(self.cobra_covs.columns)
 
         if np.any([c not in adata.obs.columns for c in cobra_keys]):
             raise ValueError('Dataset does not contain all covariates.')
+        
+        # Check if configure function needs to be run
+        configure=False
+        for k in cobra_keys:
+            if self.cov_type[k] == 'combinatorial':
+                new_cond = [c for c in adata.obs.loc[:,k].unique() if c not in self.comb_cov_dict[k]['classifier'].keys()]
+                if len(new_cond) > 0:
+                    configure=True
+        
+        return configure
+
+    def _configure_adata(self, adata: AnnData):
+        """
+        Configures anndata to match the existing covariate mappings.
+        
+        """
+        cobra_keys = list(self.cobra_covs.columns)
 
         mappings = []
         for k in cobra_keys:
@@ -214,8 +233,7 @@ class COBRA(OntoVAE):
                 mappings.append(adata.obs.loc[:,k].map(self.comb_cov_dict[k]['classifier']))
         
         adata.obsm['_cobra_categorical_covs'] = pd.concat(mappings, axis=1)
-        self.adata = adata
-    
+            
 
     def _get_embedding(self, x: torch.tensor, cat_list: Iterable[torch.tensor], cov_list: Iterable[torch.tensor]):
         """
@@ -826,10 +844,10 @@ class COBRA(OntoVAE):
             whether to retrieve latent space embedding (True) or reconstructed values (False)
         """
         self.eval()
-
         if adata is not None:
-            if '_ontovae' not in adata.uns.keys():
-                raise ValueError('Please run cobra_ai.module.utils.setup_anndata first.')
+            configure = self._check_adata(adata)
+            if configure:
+                self._configure_adata(adata)
         else:
             adata = self.adata
 
