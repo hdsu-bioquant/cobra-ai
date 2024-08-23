@@ -152,14 +152,14 @@ def setup_anndata_ontovae(adata: AnnData,
                 combos = ndata.obs.loc[:,k].unique()
                 cov_dict[k] = {}
                 cov_dict[k]['embedding'] = mapping
-                cov_dict[k]['classifier'] = dict(zip(combos, np.arange(len(combos))))
+                cov_dict[k]['classifier'] = dict(zip(combos, range(len(combos))))
                 cov_dict[k]['mapping'] = {}
                 for cs in combos:
                      cov_dict[k]['mapping'][cov_dict[k]['classifier'][cs]] = [cov_dict[k]['embedding'][c] for c in cs.split('+')]
                 comb_values = [len(v) for v in cov_dict[k]['mapping'].values()]
                 max_comb = np.max(comb_values)
                 to_pad = max_comb - comb_values
-                new_values = [list(cov_dict[k]['mapping'].values())[i] + [0] * to_pad[i] for i in np.arange(len(list(cov_dict[k]['mapping'].values())))]
+                new_values = [list(cov_dict[k]['mapping'].values())[i] + [0] * to_pad[i] for i in range(len(list(cov_dict[k]['mapping'].values())))]
                 cov_dict[k]['mapping'] = dict(zip(list(cov_dict[k]['mapping'].keys()), new_values))
                 mappings.append(ndata.obs.loc[:,k].map(cov_dict[k]['classifier']))
             else:
