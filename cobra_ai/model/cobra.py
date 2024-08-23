@@ -107,6 +107,8 @@ class COBRA(OntoVAE):
         if params['cov_dict'] is not None:
             adata.uns['cov_dict'] = params['cov_dict']
             adata.uns['cov_type'] = params['cov_type']
+        for k in ['cobra_keys', 'cov_dict', 'cov_type']:
+            params.pop(k, None)
         model = cls(adata, **params) 
         checkpoint = torch.load(modelpath + '/best_model.pt',
                             map_location = torch.device(model.device))
