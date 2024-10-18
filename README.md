@@ -1,4 +1,4 @@
-<img src="https://github.com/user-attachments/assets/f699cd10-9a03-4736-8702-362419540430" alt="drawing" width="300"/>
+<img src="https://github.com/user-attachments/assets/33ed7bfe-1192-4e9d-b199-19e423de0010" alt="drawing" width="300"/>
 
 COBRA extends our previously published OntoVAE model (https://doi.org/10.1093/bioinformatics/btad387) with an adversarial approach that allows decoupling of covariates in the latent space. Thus, users can obtain TF or pathway activities that depend on a specific covariate from the interpretable decoder of the model. The code for the original OntoVAE model has undergone some major improvements and is now also hosted in this repository.
 
