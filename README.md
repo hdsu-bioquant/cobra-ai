@@ -4,7 +4,9 @@ COBRA extends our previously published OntoVAE model (https://doi.org/10.1093/bi
 
 ## Installation
 
-For now, COBRA can be installed through this GitHub repository. The tool will also be made available on PyPI. 
+conda create -n cobra python=3.10
+conda activate cobra
+pip install cobra-ai
 
 
 ## Usage
