@@ -37,4 +37,10 @@ If you use COBRA for your research, please cite:
 Daria Doncevic, Carlos Ramirez Alvarez, Albert Li, Youcheng Zhang, Anna von Bachmann, Kasimir Noack, and Carl Herrmann: Prediction of context-specific regulatory programs and pathways using interpretable deep learning
 ```
 
+If you use OntoVAE for your research, please cite:
+```
+Daria Doncevic, Carl Herrmann, Biologically informed variational autoencoders allow predictive modeling of genetic and drug-induced perturbations, Bioinformatics, Volume 39, Issue 6, June 2023, btad387, https://doi.org/10.1093/bioinformatics/btad387
+```
+
+
 
