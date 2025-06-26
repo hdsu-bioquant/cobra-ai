@@ -88,15 +88,14 @@ def setup_anndata_ontovae(adata: AnnData,
     adata.varm = ""
 
     genes = ontobj.extract_genes(top_thresh=top_thresh, bottom_thresh=bottom_thresh)
-    adata = adata[:,adata.var_names.isin(genes)].copy()
+    adata_ont = adata[:,adata.var_names.isin(genes)].copy()
+    adata_add = adata[:, ~adata.var_names.isin(genes)].copy()
 
-    # create dummy adata for features that were not present in adata
-    out_genes = [g for g in genes if g not in adata.var_names.tolist()]
-    counts = csr_matrix(np.zeros((adata.shape[0], len(out_genes)), dtype=np.float32))
+    missing_genes = [g for g in genes if g not in adata_ont.var_names.tolist()]
+    counts = csr_matrix(np.zeros((adata.shape[0], len(missing_genes)), dtype=np.float32))
     ddata = ad.AnnData(counts)
     ddata.obs_names = adata.obs_names
-    ddata.var_names = out_genes
-
+    ddata.var_names = missing_genes
     # create OntoVAE matched adata and register ontology information
 
     ndata = ad.concat([adata, ddata], join="outer", axis=1)
@@ -107,7 +106,8 @@ def setup_anndata_ontovae(adata: AnnData,
     ndata.uns['_ontovae'] = {}
     ndata.uns['_ontovae']['thresholds'] = (top_thresh, bottom_thresh)
     ndata.uns['_ontovae']['annot'] = ontobj.extract_annot(top_thresh=top_thresh, bottom_thresh=bottom_thresh)
-    ndata.uns['_ontovae']['genes'] = ontobj.extract_genes(top_thresh=top_thresh, bottom_thresh=bottom_thresh)
+    ndata.uns['_ontovae']['onto_genes'] = genes
+    ndata.uns['_ontovae']['input_genes'] = genes + adata_add.var_names.tolist()
     ndata.uns['_ontovae']['masks'] = ontobj.extract_masks(top_thresh=top_thresh, bottom_thresh=bottom_thresh)
 
     if batch_key is not None:
