@@ -104,7 +104,7 @@ class COBRA(OntoVAE):
             params['activation_fn_dec'] = eval(params['activation_fn_dec'])
         if params['activation_fn_class'] is not None:
             params['activation_fn_class'] = eval(params['activation_fn_class'])
-        if params['cov_dict'] is not None:
+        if 'cov_dict' in list(params.keys()):
             adata.uns['cov_dict'] = params['cov_dict']
             adata.uns['cov_type'] = params['cov_type']
         for k in ['cobra_keys', 'cov_dict', 'cov_type']:
@@ -189,7 +189,7 @@ class COBRA(OntoVAE):
         """
 
         # Check if adata was processed with setup function
-        if '_ontovae' not in adata.uns.keys():
+        if '_cobra_categorical_covs' not in adata.obsm.keys():
             raise ValueError('Please run cobra_ai.module.utils.setup_anndata_ontovae first.')
         
         # Check if adata contains all neccessary covariates
