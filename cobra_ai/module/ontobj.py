@@ -6,7 +6,7 @@ import numpy as np
 import itertools
 from goatools.base import get_godag
 from goatools.semsim.termwise.wang import SsWang
-from cobra_ai.module.ontobj_utils import *
+from cobra_ai.module.utils.ontobj_utils import *
 
 
 class Ontobj():

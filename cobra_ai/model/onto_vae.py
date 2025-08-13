@@ -4,526 +4,361 @@ import os
 
 import numpy as np
 import pandas as pd
+from scipy.sparse import csr_matrix
 import torch
-from torch import optim
 import torch.nn as nn
 import torch.nn.functional as F
-from tqdm import tqdm
 
-from typing import Iterable, Literal
+from typing import Literal
 
+import anndata as ad
 from anndata import AnnData
 
-from cobra_ai.module.modules import Encoder, OntoDecoder
-from cobra_ai.module.utils import split_adata, FastTensorDataLoader, EarlyStopper, update_bn
 
-from torch.optim.lr_scheduler import CosineAnnealingLR
-
-# imports for autotuning
-from cobra_ai.module.decorators import classproperty
-from cobra_ai.module.autotune import Tunable
-from ray import train
+from cobra_ai.module.modules import Encoder, OntoDecoder, GradientReversalLayer, Classifier
+from cobra_ai.module.base_vae import BaseVAE
+from cobra_ai.module.ontobj import Ontobj
 
 """VAE with ontology in decoder"""
 
-class OntoVAE(nn.Module):
+class OntoVAE(BaseVAE):
     """
     This class combines a normal encoder with an ontology structured decoder.
     The input should be log-transformed normalized data. 
     Mainly for single-cell, but also works with bulk data if stored in adata.
-
-    Parameters
-    ----------
-    adata
-        anndata object that has been preprocessed with setup_anndata_ontovae function
-    use_batch_norm_enc
-        Whether to have `BatchNorm` layers or not in encoder
-    use_layer_norm_enc
-        Whether to have `LayerNorm` layers or not in encoder
-    use_activation_enc
-        Whether to have layer activation or not in encoder
-    activation_fn_enc
-        Which activation function to use in encoder
-    bias_enc
-        Whether to learn bias in linear layers or not in encoder
-    hidden_layers_enc
-        number of hidden layers in encoder (number of nodes is determined by neuronnum)
-    inject_covariates_enc
-        Whether to inject covariates in each layer (True), or just the first (False) of encoder
-    drop_enc
-        dropout rate in encoder
-    z_drop
-        dropout rate for latent space 
-    root_layer_latent
-        whether latent space layer is set as first ontology layer (True, default) or first decoder layer (False)
-    latent_dim
-        latent space dimension if root_layer_latent is False
-    neuronnum
-        number of neurons per term in decoder
-    use_batch_norm_dec
-        Whether to have `BatchNorm` layers or not in decoder
-    use_layer_norm_dec
-        Whether to have `LayerNorm` layers or not in decoder
-    use_activation_dec
-        Whether to have layer activation or not in decoder
-    use_activation_lat
-        Whether to use the decoder activation function after latent space sampling (not recommended)
-    activation_fn_dec
-        Which activation function to use in decoder
-    rec_activation
-        activation function for the reconstruction layer, e.g. nn.Sigmoid
-    bias_dec
-        Whether to learn bias in linear layers or not in decoder
-    inject_covariates_dec
-        Whether to inject covariates in each layer (True), or just the last (False) of decoder
-    drop_dec
-        dropout rate in decoder
     """
 
     @classmethod
-    def load(cls, adata: AnnData, modelpath: str):
-        with open(modelpath + '/model_params.json', 'r') as fp:
+    def _read_params(
+        cls,
+        modelpath
+        ):
+        with open(modelpath + '/model_hyperparams.json', 'r') as fp:
             params = json.load(fp)
-        if params['activation_fn_enc'] is not None:
-            params['activation_fn_enc'] = eval(params['activation_fn_enc'])
-        if params['activation_fn_dec'] is not None:
-            params['activation_fn_dec'] = eval(params['activation_fn_dec'])
-        if params['rec_activation'] is not None:
-            params['rec_activation'] = eval(params['rec_activation'])
-        model = cls(adata, **params) 
-        checkpoint = torch.load(modelpath + '/best_model.pt',
-                            map_location = torch.device(model.device))
-        model.load_state_dict(checkpoint['model_state_dict'], strict=False)
-        return model
+        if params['activation_fn'] is not None:
+            params['activation_fn'] = eval(params['activation_fn'])
+        params['onto_annot'] = pd.DataFrame(params['onto_annot'])
+        params['masks'] = [np.array(m) for m in params['masks']]
+        params['trained'] = True
+        return params
 
-    def __init__(self, 
-                 adata: AnnData, 
-                 use_batch_norm_enc: Tunable[bool] = True,
-                 use_layer_norm_enc: Tunable[bool] = False,
-                 use_activation_enc: Tunable[bool] = True,
-                 activation_fn_enc: Tunable[nn.Module] = nn.ReLU,
-                 bias_enc: Tunable[bool] = True,
-                 hidden_layers_enc: Tunable[int]=3, 
-                 inject_covariates_enc: Tunable[bool] = False,
-                 drop_enc: Tunable[float] = 0.2, 
-                 z_drop: Tunable[float] = 0.5,
-                 root_layer_latent: Tunable[bool] = False,
-                 latent_dim: Tunable[int] = 128,
-                 neuronnum: Tunable[int] = 3,
-                 use_batch_norm_dec: Tunable[bool] = True,
-                 use_layer_norm_dec: Tunable[bool] = False,
-                 use_activation_dec: Tunable[bool] = True,
-                 use_activation_lat: Tunable[bool] = False,
-                 activation_fn_dec: Tunable[nn.Module] = nn.Tanh,
-                 rec_activation: nn.Module = None,
-                 bias_dec: Tunable[bool] = True,
-                 inject_covariates_dec: Tunable[bool] = False,
-                 drop_dec: Tunable[float] = 0):
+    def __init__(self):
         super().__init__()
 
-        # store init params in dict
-        self.params = {'use_batch_norm_enc': use_batch_norm_enc,
-                          'use_layer_norm_enc': use_layer_norm_enc,
-                          'use_activation_enc': use_activation_enc,
-                          'activation_fn_enc': str(activation_fn_enc).split("'")[1] if activation_fn_enc is not None else activation_fn_enc,
-                          'bias_enc': bias_enc,
-                          'hidden_layers_enc': hidden_layers_enc,
-                          'inject_covariates_enc': inject_covariates_enc,
-                          'drop_enc': drop_enc,
-                          'z_drop': z_drop,
-                          'root_layer_latent': root_layer_latent,
-                          'latent_dim': latent_dim,
-                          'neuronnum': neuronnum,
-                          'use_batch_norm_dec': use_batch_norm_dec,
-                          'use_layer_norm_dec': use_layer_norm_dec,
-                          'use_activation_dec': use_activation_dec,
-                          'use_activation_lat': use_activation_lat,
-                          'activation_fn_dec': str(activation_fn_dec).split("'")[1] if activation_fn_dec is not None else activation_fn_dec,
-                          'rec_activation': str(rec_activation).split("'")[1] if rec_activation is not None else rec_activation,
-                          'bias_dec': bias_dec,
-                          'inject_covariates_dec': inject_covariates_dec,
-                          'drop_dec': drop_dec}
+    def construct(
+            self, 
+            ontobj: Ontobj = None, 
+            adata: AnnData = None, 
+            batch_key: str = None,
+            top_thresh: int = None,
+            bottom_thresh: int = None,
+            keep_genes: bool = True,
+            latent_dim: int = 128,
+            root_layer_latent: bool = False,
+            neuronnum: int = 3,
+            hidden_dims: list = [256,256],
+            hidden_dims_classifier: list = [64],
+            normalisation: Literal["batch", "layer"] = "batch",
+            activation_fn: nn.Module = nn.ReLU,
+            bias: bool = True,
+            dropout_rate: float = 0.2,
+            z_dropout: float = 0.5,
+            pos_weights: bool = True,
+            linear_decoder: bool = False,
+            input_features: list = [],
+            onto_features: list = [],
+            masks: list = [],
+            onto_annot: dict = {},
+            batch_idx: dict = {},
+            trained: bool = False
+            ):
+        """
+        Function to construct the OntoVAE model based on an Ontobj.
 
+        Parameters
+        ----------
+        ontobj
+            Ontobj object containing the ontology information
+        adata
+            anndata object containing the RNA data 
+        batch_key
+            column in adata.obs that contains batch information (optional)
+        latent_dim
+            latent dimension for RNA modality
+        root_layer_latent
+            whether the first ontology layer should be located in the latent space (True) or in the first decoder layer (False)
+        neuronnum
+            number of neurons per ontology term
+        hidden_dims
+            A list of integers indicating the number of nodes in each hidden layer of the RNA encoder
+        hidden_dims_dec
+            if none, rna_hidden_dims_dec = rna_hidden_dims[::-1]
+        hidden_dims_classifier
+            A list of integers indicating the number of nodes in each hidden layer of the batch classifier
+        normalisation
+            which normalisation to use, either "batch" or "layer"
+        activation_fn
+            Which activation function to use
+        bias 
+            whether to learn bias in linear layers
+        dropout_rate
+            dropout rate
+        z_dropout
+            dropout rate for the latent space
+        pos_weights
+            whether to use positive weights in the decoder
+        input_features
+            list of input features (used internally when loading a trained model)
+        onto_features
+            list of ontology features (used internally when loading a trained model)
+        masks
+            list of decoder masks (used internally when loading a trained model)
+        onto_annot
+            dataframe with ontology annotation (used internally when loading a trained model)
+        batch_idx
+            dictionary of batch to index mapping (used internally when loading a trained model)
+        trained
+            whether the model is already trained or not (used internally when loading a trained model)
+        """
 
+        self.model = 'ontovae'
+        self.trained = trained
+        if not self.trained:
+            self.val_loss_min = float('inf')
+
+        # general parameters
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.hyperparams = {}
         self.adata = adata
+        self.input_features = input_features
+        self.z_dropout = z_dropout
 
-        if '_ontovae' not in self.adata.uns.keys():
-            raise ValueError('Please run cobra_ai.module.utils.setup_anndata_ontovae first.')
-
-        # parse OntoVAE information
-        self.thresholds = adata.uns['_ontovae']['thresholds']
-        self.in_features = len(self.adata.uns['_ontovae']['genes'])
-        self.mask_list = adata.uns['_ontovae']['masks']
-        self.mask_list = [torch.tensor(m, dtype=torch.float32) for m in self.mask_list]
-        self.layer_dims_dec =  np.array([self.mask_list[0].shape[1]] + [m.shape[0] for m in self.mask_list])
+        # parse batch information
+        self.batch_key = batch_key
+        self.batch_names = []
+        self.new_batch_names = []
+        self.batch_idx = batch_idx
+        if self.batch_idx is not None:
+            self.batch_names = list(self.batch_idx.keys())
+        
+        # OntoVAE specific
+        self.keep_genes = keep_genes
+        self.neuronnum = neuronnum
         self.root_layer_latent = root_layer_latent
         self.start_point = 0 if self.root_layer_latent else 1
-        self.latent_dim = self.layer_dims_dec[0] * neuronnum if self.root_layer_latent else latent_dim
-        self.neurons_per_layer_enc = self.latent_dim
-        self.z_drop = z_drop
+        self.pos_weights = pos_weights
+        if self.trained:   
+            self.onto_features = onto_features
+            self.masks = masks
+            self.onto_annot = onto_annot
+        
+        # parse ontology information
+        self._parse_ontobj(
+                ontobj=ontobj,
+                top_thresh=top_thresh,
+                bottom_thresh=bottom_thresh,
+                latent_dim = latent_dim
+        )
+        
+        # parse adata and input features
+        if adata is not None:
+            self._match_adata(
+                adata,
+                input_features = input_features,
+            )
 
-        # additional info
-        self.neuronnum = neuronnum
-        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        self.use_activation_dec = use_activation_dec
-        self.use_activation_lat = use_activation_lat
-        self.activation_fn_dec = activation_fn_dec
-        self.rec_activation = rec_activation
+        # update batch information if adata is provided
+        if adata is not None and batch_key is not None:
+            self._update_batch(
+                adata,
+                batch_key,
+                add_layers=False
+            )
 
-        # parse covariate information
-        self.batch = adata.obs['_ontovae_batch']
-        self.labels = adata.obs['_ontovae_labels']
-        self.covs = adata.obsm['_ontovae_categorical_covs'] if '_ontovae_categorical_covs' in adata.obsm.keys() else None
-
-        self.n_cat_list = [len(self.batch.unique()), len(self.labels.unique())]
-        if self.covs is not None:
-            self.n_cat_list.extend([len(self.covs[c].unique()) for c in self.covs.columns])
-
-        self.rec_weights = None
+        # store model construction hyperparams in dict
+        self.hyperparams.update({
+            'input_features': self.input_features,
+            'keep_genes': keep_genes,
+            'latent_dim': latent_dim,
+            'root_layer_latent': root_layer_latent,
+            'neuronnum': neuronnum,
+            'hidden_dims': hidden_dims,
+            'normalisation': normalisation,
+            'activation_fn': str(activation_fn).split("'")[1],
+            'bias': bias,
+            'dropout_rate': dropout_rate,
+            'z_dropout': z_dropout,
+            'pos_weights': pos_weights, 
+            'linear_decoder': linear_decoder
+        })
 
         # Encoder
-        self.encoder = Encoder(in_features = self.in_features,
-                                latent_dim = self.latent_dim,
-                                n_cat_list = self.n_cat_list,
-                                hidden_layers = hidden_layers_enc,
-                                neurons_per_layer = self.neurons_per_layer_enc, 
-                                use_batch_norm = use_batch_norm_enc,
-                                use_layer_norm = use_layer_norm_enc,
-                                use_activation = use_activation_enc,
-                                activation_fn = activation_fn_enc,
-                                bias = bias_enc,
-                                inject_covariates = inject_covariates_enc,
-                                drop = drop_enc)
+        self.encoder = Encoder(
+            n_features = len(self.input_features),
+            hidden_dims = hidden_dims,
+            latent_dim = self.latent_dim,
+            batch_names = self.batch_names,
+            normalisation = normalisation,
+            activation_fn = activation_fn,
+            bias = bias,
+            dropout_rate = dropout_rate 
+        )
 
         # Decoder
-        self.decoder = OntoDecoder(in_features = self.in_features,
-                                    layer_dims = self.layer_dims_dec,
-                                    mask_list = self.mask_list,
-                                    root_layer_latent = self.root_layer_latent,
-                                    latent_dim = self.latent_dim,
-                                    neuronnum = self.neuronnum,
-                                    n_cat_list = self.n_cat_list,
-                                    use_batch_norm = use_batch_norm_dec,
-                                    use_layer_norm = use_layer_norm_dec,
-                                    use_activation = use_activation_dec,
-                                    activation_fn = activation_fn_dec,
-                                    rec_activation = rec_activation,
-                                    bias = bias_dec,
-                                    inject_covariates = inject_covariates_dec,
-                                    drop = drop_dec)
+        self.decoder = OntoDecoder(
+            n_features = len(self.onto_features),
+            layer_dims = self.layer_dims_dec,
+            mask_list = self.mask_list,
+            root_layer_latent = self.root_layer_latent,
+            latent_dim = self.latent_dim,
+            batch_names = self.batch_names,
+            neuronnum = self.neuronnum,
+            normalisation = normalisation,
+            activation_fn = activation_fn,
+            bias = bias,
+            dropout_rate = dropout_rate,
+            pos_weights = self.pos_weights,
+            linear_decoder = linear_decoder 
+        )
+
+        # optional: batch alignment
+        if self.batch_key or len(self.batch_idx) > 0:
+            self.grl = GradientReversalLayer()
+            self.batch_classifier = Classifier(
+                n_features = self.latent_dim,
+                hidden_dims = hidden_dims_classifier,
+                n_classes = len(self.batch_idx),
+                normalisation = normalisation,
+                activation_fn = activation_fn,
+                bias = bias,
+                dropout_rate = dropout_rate
+            )
 
         self.to(self.device)
 
-    def _cov_tensor(self, adata):
-        """
-        Helper function to aggregate information from adata to use as input for dataloader.
-        """
-        covs = adata.obs[['_ontovae_batch', '_ontovae_labels']]
-        if '_ontovae_categorical_covs' in adata.obsm.keys():
-            covs = pd.concat([covs, adata.obsm['_ontovae_categorical_covs']], axis=1)
-        return torch.tensor(np.array(covs))
+        self.initialized = True
 
-    def reparameterize(self, mu, log_var):
-        """
-        Performs the reparameterization trick.
 
-        Parameters
-        ----------
-        mu
-            mean from the encoder's latent space
-        log_var
-            log variance from the encoder's latent space
-        mode
-            train: training mode
-            val: validation mode
+    def _parse_ontobj(
+            self, 
+            ontobj: Ontobj = None,
+            top_thresh: int = None,
+            bottom_thresh: int = None,
+            latent_dim: int = 128,
+            ):
         """
-        sigma = torch.exp(0.5*log_var) 
-        eps = torch.randn_like(sigma) 
-        z = mu + eps * sigma
-        if self.z_drop > 0:
-            if self.training:
-                z = nn.Dropout(p=self.z_drop)(z)
-        return z
+        Helper function to parse the Ontobj and set up the model accordingly.
+        """
+        # repopulate the slots from ontobj
+        if ontobj is not None:
+            if not isinstance(ontobj, Ontobj):
+                raise ValueError("ontobj must be an instance of Ontobj")
+            
+            # retrive trimming thresholds or extract from ontobj if not provided
+            if top_thresh is not None and bottom_thresh is not None:
+                if not str(top_thresh) + '_' + str(bottom_thresh) in ontobj.annot.keys():
+                    raise ValueError('Available trimming thresholds are: ' + ', '.join(list(ontobj.annot.keys())))
+            else:
+                top_thresh = list(ontobj.annot.keys())[0].split('_')[0]
+                bottom_thresh = list(ontobj.annot.keys())[0].split('_')[1]
+
+            # retrieve features
+            self.onto_features = ontobj.extract_genes(
+                top_thresh = top_thresh,
+            )
+
+            # retrieve ontology annotations
+            self.onto_annot = ontobj.extract_annot(
+                top_thresh = top_thresh,
+                bottom_thresh = bottom_thresh
+            )
+
+            # retrieve decoder masks
+            self.masks = ontobj.extract_masks(
+                top_thresh = top_thresh,
+                bottom_thresh = bottom_thresh
+            )
+
+        # set masks and layer dimensions
+        self.mask_list = [torch.tensor(m, dtype=torch.float32) for m in self.masks]
+        self.layer_dims_dec =  np.array([self.mask_list[0].shape[1]] + [m.shape[0] for m in self.mask_list])
+        self.latent_dim = self.layer_dims_dec[0] * self.neuronnum if self.root_layer_latent else latent_dim
+
+        # update hyperparams with ontology information
+        self.hyperparams.update({
+            'onto_features': self.onto_features,
+            'onto_annot': self.onto_annot.to_dict(orient='records'),
+            'masks': [m.tolist() for m in self.masks]
+        })
+
+        if len(self.onto_features) == 0:
+            raise ValueError("No ontology features found. Please check the Ontobj or input parameters.")
         
-    def _get_embedding(self, x: torch.tensor, cat_list: Iterable[torch.tensor]):
-        """
-        Generates latent space embedding.
 
-        Parameters
-        ----------
-        x
-            torch.tensor of shape (minibatch, in_features)
-        cat_list
-            Iterable of torch.tensors containing the category memberships
-            shape of each tensor is (minibatch, 1)
+    def _match_adata(
+            self,
+            adata: AnnData,
+            input_features: list,
+            return_adata: bool = False
+            ):
         """
-        mu, log_var = self.encoder(x, cat_list)
-        z = self.reparameterize(mu, log_var)
-        if self.use_activation_lat:
-            z = self.activation_fn_dec()(z)
-        return z, mu, log_var
+        Helper function to match the adata to the ontology and input features.
+        """
+        adata = adata.copy()
 
+        # necessary cleanup of adata
+        if len(list(adata.layers.keys())) > 0:
+            for k in list(adata.layers.keys()):
+                del adata.layers[k]
 
-    def forward(self, x: torch.tensor, cat_list: Iterable[torch.tensor]):
-        """
-        Forward computation on minibatch of samples.
-        
-        Parameters
-        ----------
-        x
-            torch.tensor of shape (minibatch, in_features)
-        cat_list
-            Iterable of torch.tensors containing the category memberships
-            shape of each tensor is (minibatch, 1)
-        """
+        adata.varm = ""
+        adata_genes = list(adata.var_names)
 
-        z, mu, log_var = self._get_embedding(x, cat_list)
-        reconstruction = self.decoder(z, cat_list)
-        return z, mu, log_var, reconstruction
-
-    def vae_loss(self, reconstruction, mu, log_var, data, kl_coeff, run=None):
-        """
-        Calculates VAE loss as combination of reconstruction loss and weighted Kullback-Leibler loss.
-        """
-        kl_loss = -0.5 * torch.sum(1. + log_var - mu.pow(2) - log_var.exp(), )
-        if self.rec_weights is not None:
-            rec_loss = torch.sum(torch.matmul(input=(data - reconstruction)**2, other=self.rec_weights))
+        # define input features based on adata and param
+        if len(input_features) > 0 and self.keep_genes:
+            genes = input_features
         else:
-            rec_loss = F.mse_loss(reconstruction, data, reduction="sum")
-        if run is not None:
-            mode = 'train' if self.training else 'val'
-            run["metrics/" + mode + "/kl_loss"].log(kl_loss)
-            run["metrics/" + mode + "/rec_loss"].log(rec_loss)
-        return torch.mean(rec_loss + kl_coeff*kl_loss)
+            genes = self.onto_features
+
+        # split adata into target and additional genes
+        adata_target = adata[:,adata.var_names.isin(genes)].copy()
+        adata_add = adata[:, ~adata.var_names.isin(genes)].copy()
+
+        # look for missing genes and create dummy adata
+        missing_genes = [g for g in genes if g not in adata_genes]
+        counts = csr_matrix(np.zeros((adata.shape[0], len(missing_genes)), dtype=np.float32))
+        ddata = AnnData(counts)
+        ddata.obs_names = adata.obs_names
+        ddata.var_names = missing_genes
+
+        # concatenate everything
+        ndata = ad.concat([adata_target, ddata], join="outer", axis=1)
+        ndata = ndata[:,genes]
+        if self.keep_genes:
+            ndata = ad.concat([ndata, adata_add], join="outer", axis=1)
+
+        # repopulate the adata object
+        ndata.obs = adata.obs
+        ndata.obsm = adata.obsm
+
+        # redefine the input features
+        self.input_features = ndata.var_names.tolist()
+
+        if return_adata:
+            return ndata
+        else:
+            self.adata = ndata
+
+
+    def _average_neuronnum(self, act: torch.tensor):
+        """
+        Helper function to calculate the average value of multiple neurons.
+        """
+        chunks = act.split(self.neuronnum, dim=1)  # splits into chunks of size neuronnum along dim=1
+        act = torch.stack(chunks, dim=1).mean(dim=2) # takes the average across the neurons
+        
+        return act
     
-    def train_round(self, 
-                    dataloader: FastTensorDataLoader, 
-                    kl_coeff: float, 
-                    optimizer: optim.Optimizer, 
-                    pos_weights: bool,
-                    run=None):
-        """
-        Parameters
-        ----------
-        dataloader
-            pytorch dataloader instance with training data
-        kl_coeff 
-            coefficient for weighting Kullback-Leibler loss
-        optimizer
-            optimizer for training
-        run
-            Neptune run if training is to be logged
-        """
-        # set to train mode
-        self.train()
-
-        # initialize running loss
-        running_loss = 0.0
-
-        # iterate over dataloader for training
-        for i, minibatch in tqdm(enumerate(dataloader), total=len(dataloader)):
-
-            # move minibatch to device
-            data = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
-            cat_list = torch.split(minibatch[1].T.to(self.device), 1)
-            optimizer.zero_grad()
-
-            # forward step
-            _, mu, log_var, reconstruction = self.forward(data, cat_list)
-            loss = self.vae_loss(reconstruction, mu, log_var, data, kl_coeff, run=run)
-            running_loss += loss.item()
-
-            # backward propagation
-            loss.backward()
-
-            # zero out gradients from non-existent connections
-            for i in range(self.start_point, len(self.decoder.decoder)):
-                self.decoder.decoder[i][0].weight.grad = torch.mul(self.decoder.decoder[i][0].weight.grad, self.decoder.masks[i-self.start_point])
-
-            # perform optimizer step
-            optimizer.step()
-
-            # make weights in Onto module positive
-            if pos_weights:
-                for i in range(self.start_point, len(self.decoder.decoder)):
-                    self.decoder.decoder[i][0].weight.data = self.decoder.decoder[i][0].weight.data.clamp(0)
-
-        # compute avg training loss
-        train_loss = running_loss/len(dataloader)
-        return train_loss
-
-    @torch.no_grad()
-    def val_round(self, 
-                  dataloader: FastTensorDataLoader, 
-                  kl_coeff: float, 
-                  run=None):
-        """
-        Parameters
-        ----------
-        dataloader
-            pytorch dataloader instance with training data
-        kl_coeff
-            coefficient for weighting Kullback-Leibler loss
-        run
-            Neptune run if training is to be logged
-        """
-        # set to eval mode
-        self.eval()
-
-        # initialize running loss
-        running_loss = 0.0
-
-        # iterate over dataloader for validation
-        for i, minibatch in tqdm(enumerate(dataloader), total=len(dataloader)):
-
-            # move minibatch to device
-            data = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
-            cat_list = torch.split(minibatch[1].T.to(self.device), 1)
-
-            # forward step
-            _, mu, log_var, reconstruction = self.forward(data, cat_list)
-            loss = self.vae_loss(reconstruction, mu, log_var,data, kl_coeff, run=run)
-            running_loss += loss.item()
-
-        # compute avg val loss
-        val_loss = running_loss/len(dataloader)
-        return val_loss
-
-    def train_model(self, 
-                    modelpath: str, 
-                    save: bool = True,
-                    train_size: float = 0.9,
-                    seed: int = 42,
-                    lr: Tunable[float]=1e-4, 
-                    kl_coeff: Tunable[float]=1e-4, 
-                    batch_size: Tunable[int]=128, 
-                    optimizer: Tunable[optim.Optimizer] = optim.AdamW,
-                    pos_weights: Tunable[bool] = True,
-                    use_rec_weights: bool = False,
-                    epochs: int=300, 
-                    early_stopping: bool=True,
-                    patience: int=10,
-                    run=None):
-        """
-        Parameters
-        ----------
-        modelpath
-            path to a folder where to store the params and the best model 
-        save
-            if the params and the best model should be saved, if save is False the modelpath parameter could only be an empty string
-        train_size
-            which percentage of samples to use for training
-        seed
-            seed for the train-val split
-        lr
-            learning rate
-        kl_coeff
-            Kullback Leibler loss coefficient
-        batch_size
-            size of minibatches
-        optimizer
-            which optimizer to use
-        pos_weights
-            whether to make weights in decoder positive
-        epochs
-            over how many epochs to train
-        run
-            passed here if logging to Neptune should be carried out
-        """
-
-        if os.path.isfile(modelpath + '/best_model.pt'):
-            print("A model already exists in the specified directory and will be overwritten.")
-
-        if save:
-            # save train params
-            train_params = {'train_size': train_size,
-                            'seed': seed,
-                            'lr': lr,
-                            'kl_coeff': kl_coeff,
-                            'batch_size': batch_size,
-                            'optimizer': str(optimizer).split("'")[1],
-                            'pos_weights': pos_weights,
-                            'use_rec_weights': use_rec_weights,
-                            'epochs': epochs,
-                            'early_stopping': early_stopping,
-                            'patience': patience
-                            }
-            with open(modelpath + '/train_params.json', 'w') as fp:
-                json.dump(train_params, fp, indent=4)
-            
-            if run is not None:
-                run["train_parameters"] = train_params
-
-            # save model params
-            with open(modelpath + '/model_params.json', 'w') as fp:
-                json.dump(self.params, fp, indent=4)
-            
-            if run is not None:
-                run["model_parameters"] = self.params
-
-        # train-val split
-        train_adata, val_adata = split_adata(self.adata, 
-                                             train_size = train_size,
-                                             seed = seed)
-
-        train_covs = self._cov_tensor(train_adata)
-        val_covs = self._cov_tensor(val_adata)
-
-        # generate dataloaders
-        trainloader = FastTensorDataLoader(train_adata.X, 
-                                           train_covs,
-                                         batch_size=batch_size, 
-                                         shuffle=True)
-        valloader = FastTensorDataLoader(val_adata.X, 
-                                         val_covs,
-                                        batch_size=batch_size, 
-                                        shuffle=False)
-        
-        # compute reconstruction weights
-        if use_rec_weights:
-            weights = torch.tensor(np.var(np.array(self.adata.X.todense()), axis=0), dtype=torch.float32)
-            self.rec_weights = torch.mul(weights, torch.div(weights[weights != 0].size(dim=0), torch.sum(weights,))).to(self.device)
-        else:
-            self.rec_weights = None
-
-        val_loss_min = float('inf')
-        optimizer = optimizer(self.parameters(), lr = lr)
-        scheduler = CosineAnnealingLR(optimizer, T_max=100)
-
-        if early_stopping:
-                early_stopper = EarlyStopper(patience=patience)
-
-        for epoch in range(epochs):
-            print(f"Epoch {epoch+1} of {epochs}")
-            train_epoch_loss = self.train_round(trainloader, kl_coeff, optimizer, pos_weights, run)
-            
-            scheduler.step()
-
-            val_epoch_loss = self.val_round(valloader, kl_coeff, run)
-
-            if early_stopping:
-                if early_stopper.early_stop(val_epoch_loss):
-                    break
-
-            train.report({"validation_loss": val_epoch_loss})
-
-            if run is not None:
-                run["metrics/train/loss"].log(train_epoch_loss)
-                run["metrics/val/loss"].log(val_epoch_loss)
-                
-            if val_epoch_loss < val_loss_min and save:
-                print('New best model!')
-                torch.save({
-                    'epoch': epoch,
-                    'model_state_dict': self.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'loss': val_epoch_loss,
-                }, modelpath + '/best_model.pt')
-                val_loss_min = val_epoch_loss
-                
-            print(f"Train Loss: {train_epoch_loss:.4f}")
-            print(f"Val Loss: {val_epoch_loss:.4f}")
-
     def _get_activation(self, index, activation={}):
         def hook(model, input, output):
             activation[index] = output
@@ -531,15 +366,14 @@ class OntoVAE(nn.Module):
     
     def _attach_hooks(self, lin_layer=True, activation={}, hooks={}):
         """helper function to attach hooks to the decoder"""
-        for i in range(len(self.decoder.decoder)-1):
+        for i in range(len(self.decoder.decoder.fc_layers)): #range(self.start_point, len(self.decoder.decoder.fc_layers)
             key = str(i)
-            hook_ind=0 if lin_layer else np.where(np.array(self.decoder.decoder[i]) != None)[0][-1]
-            value = self.decoder.decoder[i][hook_ind].register_forward_hook(self._get_activation(i, activation))
+            hook_ind=0 if lin_layer else np.where(np.array(self.decoder.decoder.fc_layers[i]) != None)[0][-1]
+            value = self.decoder.decoder.fc_layers[i][hook_ind].register_forward_hook(self._get_activation(i, activation))
             hooks[key] = value
 
-
     @torch.no_grad()
-    def _hook_activities(self, x, cat_list, lin_layer=True):
+    def _hook_activities(self, x, lin_layer=True):
         """
         Attaches hooks and retrieves pathway activities.
 
@@ -547,9 +381,6 @@ class OntoVAE(nn.Module):
         ----------
         x
             torch.tensor of shape (minibatch, in_features)
-        cat_list
-            Iterable of torch.tensors containing the category memberships
-            shape of each tensor is (minibatch, 1)
         lin_layer:
             whether hooks should be attached to linear layer of the model
         """
@@ -565,7 +396,7 @@ class OntoVAE(nn.Module):
         self._attach_hooks(lin_layer=lin_layer, activation=activation, hooks=hooks)
 
         # pass data through model
-        z, _, _, _ = self.forward(x, cat_list)
+        out = self.forward(x)
 
         act = torch.cat(list(activation.values()), dim=1)
         
@@ -575,79 +406,19 @@ class OntoVAE(nn.Module):
 
         # return pathway activities or reconstructed gene values
         if self.root_layer_latent:
-            return torch.hstack((z,act))
+            return torch.hstack((out['z'], act))
         else:
             return act
-
-    def _average_neuronnum(self, act: np.array):
-        """
-        Helper function to calculate the average value of multiple neurons.
-        """
-        act = np.array(np.split(act, act.shape[1]/self.neuronnum, axis=1)).mean(axis=2).T
-        return act
-
+        
     @torch.no_grad()
-    def _run_batches(self, adata: AnnData, retrieve: Literal['latent', 'act', 'rec'], lin_layer: bool=True):
-        """
-        Runs batches of a dataloader through encoder or complete VAE and collects results.
-
-        Parameters
-        ----------
-        latent
-            whether to retrieve latent space embedding (True) or reconstructed values (False)
-        """
-        self.eval()
-
-        if adata is not None:
-            if '_ontovae' not in adata.uns.keys():
-                raise ValueError('Please run cobra_ai.module.utils.setup_anndata first.')
-        else:
-            adata = self.adata
-
-        covs = self._cov_tensor(adata)
-
-        dataloader = FastTensorDataLoader(adata.X, 
-                                          covs,
-                                         batch_size=128, 
-                                         shuffle=False)
-
-        res = []
-        for minibatch in dataloader:
-            x = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
-            cat_list = torch.split(minibatch[1].T.to(self.device), 1)
-            if retrieve == 'latent':
-                result, _, _ = self._get_embedding(x, cat_list)
-            elif retrieve == 'act':
-                result = self._hook_activities(x, cat_list, lin_layer)
-            else:
-                _, _, _, result = self.forward(x, cat_list)
-            result = result.to('cpu').detach().numpy()
-            if retrieve == 'latent':
-                if self.root_layer_latent:
-                    result = self._average_neuronnum(result)
-            if retrieve == 'act':
-                result = self._average_neuronnum(result)
-            res.append(result)
-        res = np.vstack(res)
-
-        return res
-    
-    @torch.no_grad()
-    def to_latent(self, adata: AnnData=None):
-        """
-        Wrapper around _run_batches to retrieve latent space embedding.
-
-        Parameters
-        ----------
-        adata
-            AnnData object that was processed with setup_anndata_vanillavae
-        """
-        self.eval()
-        res = self._run_batches(adata, retrieve='latent')
-        return res
-    
-    @torch.no_grad()
-    def get_pathway_activities(self, adata: AnnData=None, lin_layer=True):
+    def get_pathway_activities(
+        self, 
+        adata: AnnData=None, 
+        batch_key: str = None,
+        lin_layer: bool=True,
+        output_numpy: bool=True,
+        return_adata: bool = True
+        ):
         """
         Wrapper around _run_batches to retrieve pathway activities.
 
@@ -658,78 +429,33 @@ class OntoVAE(nn.Module):
         lin_layer
             whether linear layer should be used for calculation
         """
-        if len(self.decoder.decoder) == 1:
-            raise ValueError('Pathway activities cannot be computed for a one-layer network.')
-
         self.eval()
-        res = self._run_batches(adata, 'act', lin_layer)
-        return res
 
-    @torch.no_grad()
-    def get_reconstructed_values(self, adata: AnnData=None):
-        """
-        Wrapper around _run_batches to retrieve output layer.
+        if return_adata:
+            output_numpy = True
 
-        Parameters
-        ----------
-        adata
-            AnnData object that was processed with setup_anndata_vanillavae
-        """
-        self.eval()
-        res = self._run_batches(adata, retrieve='rec')
-        return res
+        self.batch_key = batch_key
+
+        if self.adata is None and adata is None:
+            raise ValueError('Please provide adata.')
+        
+        if adata is None:
+            adata = self.adata
+
+        res = self._run_minibatches(
+            adata, 
+            retrieve='act', 
+            lin_layer=lin_layer,
+            output_numpy = output_numpy
+            )
+        
+        if return_adata:
+            adata = self._return_adata(
+                adata,
+                res,
+                'pathway_activities'
+            )
+
+        return adata if return_adata else res
     
-    @torch.no_grad()
-    def perturbation(self, adata: AnnData=None, genes: list=[], values: list=[], output=Literal['latent','act','rec'], lin_layer=True):
-        """
-        Retrieves pathway activities or reconstructed gene values after performing in silico perturbation.
-
-        Parameters
-        ----------
-        adata
-            AnnData object that was processed with setup_anndata
-        genes
-            a list of genes to perturb
-        values
-            list with new values, same length as genes
-        output
-            whether to retrieve latent space ('latent'), pathway activities ('act') or reconstructed gene values ('rec')
-        lin_layer
-            whether linear layer should be used for pathway activity retrieval
-        """
-        self.eval()
-
-        if adata is not None:
-            if '_ontovae' not in adata.uns.keys():
-                raise ValueError('Please run cobra_ai.module.utils.setup_anndata first.')
-            pdata = adata.copy()
-        else:
-            pdata = self.adata.copy()
-
-        # get indices of the genes in list
-        gindices = [pdata.uns['_ontovae']['genes'].index(g) for g in genes]
-
-        # replace their values
-        for i in range(len(genes)):
-            pdata.X[:,gindices[i]] = values[i]
-
-        # run perturbed data through network
-        if output == 'latent':
-            res = self._run_batches(pdata, 'latent')
-        elif output == 'act':
-            res = self._run_batches(pdata, 'act', lin_layer)
-        else:
-            res = self._run_batches(pdata, retrieve='rec')
-
-        return res
-
-
-    @classproperty
-    def _tunables(cls):
-        return [cls.__init__, cls.train_model]
-    
-    @classproperty
-    def _metrics(cls):
-        ''' Maybe should provide the metric in the manner ["name", "mode"]'''
-        return ["validation_loss"]
-
+   

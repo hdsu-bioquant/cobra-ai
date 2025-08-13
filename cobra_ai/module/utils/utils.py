@@ -19,17 +19,17 @@ import colorcet as cc
 
 """AnnData handling"""
 
-def setup_anndata_ontovae(adata: AnnData,
-                  ontobj: Ontobj,
-                top_thresh: Optional[int]=None,
-                bottom_thresh: Optional[int]=None,
-                batch_key: Optional[str] = None,
-                labels_key: Optional[str] = None,
-                categorical_covariate_keys: Optional[list[str]] = None,
-                #class_key: Optional[str] = None,
-                cobra_keys: Optional[list[str]] = None, 
-                control_group: Optional[list[str]] = None,
-                layer: Optional[str] = None):
+def setup_anndata_ontovae(
+        adata: AnnData,
+        ontobj: Ontobj,
+        keep_genes: bool = True,
+        top_thresh: Optional[int]=None,
+        bottom_thresh: Optional[int]=None,
+        #class_key: Optional[str] = None,
+        cobra_keys: Optional[list[str]] = None, 
+        control_group: Optional[list[str]] = None,
+        layer: Optional[str] = None
+        ):
     
     """
     Matches the dataset to the ontology and creates fields for OntoVAE and COBRA.
@@ -40,16 +40,12 @@ def setup_anndata_ontovae(adata: AnnData,
             Scanpy single-cell AnnData object
         ontobj
             Ontobj containing a preprocessed ontology
+        keep_genes
+            whether to keep the genes that are not in the ontology
         top_thresh
             top threshold for ontology trimming
         bottom_thresh
             bottom threshold for ontology trimming
-        batch_key
-            Observation to be used as batch
-        labels_key
-            Observation containing the labels
-        categorical_covariate_keys
-            Observations to use as covariate keys
         class_key
             Observation to use as class (only for OntoVAE + classifier)
         cobra_keys
@@ -77,7 +73,6 @@ def setup_anndata_ontovae(adata: AnnData,
         top_thresh = list(ontobj.annot.keys())[0].split('_')[0]
         bottom_thresh = list(ontobj.annot.keys())[0].split('_')[1]
 
-    
     if layer is not None:
          adata.X = adata.layers[layer].copy()
         
@@ -98,8 +93,10 @@ def setup_anndata_ontovae(adata: AnnData,
     ddata.var_names = missing_genes
     # create OntoVAE matched adata and register ontology information
 
-    ndata = ad.concat([adata, ddata], join="outer", axis=1)
-    ndata = ndata[:,ndata.var_names.sort_values()]
+    ndata = ad.concat([adata_ont, ddata], join="outer", axis=1)
+    ndata = ndata[:,genes]
+    if keep_genes:
+        ndata = ad.concat([ndata, adata_add], join="outer", axis=1)
  
     ndata.obs = adata.obs
     ndata.obsm = adata.obsm
@@ -107,21 +104,8 @@ def setup_anndata_ontovae(adata: AnnData,
     ndata.uns['_ontovae']['thresholds'] = (top_thresh, bottom_thresh)
     ndata.uns['_ontovae']['annot'] = ontobj.extract_annot(top_thresh=top_thresh, bottom_thresh=bottom_thresh)
     ndata.uns['_ontovae']['onto_genes'] = genes
-    ndata.uns['_ontovae']['input_genes'] = genes + adata_add.var_names.tolist()
+    ndata.uns['_ontovae']['input_genes'] = ndata.var_names.tolist()
     ndata.uns['_ontovae']['masks'] = ontobj.extract_masks(top_thresh=top_thresh, bottom_thresh=bottom_thresh)
-
-    if batch_key is not None:
-        ndata.obs['_ontovae_batch'] = pd.factorize(ndata.obs.loc[:,batch_key])[0]
-    else:
-        ndata.obs['_ontovae_batch'] = 0
-    
-    if labels_key is not None:
-        ndata.obs['_ontovae_labels'] = pd.factorize(ndata.obs.loc[:,labels_key])[0]
-    else:
-        ndata.obs['_ontovae_labels'] = 0
-    
-    if categorical_covariate_keys is not None:
-        ndata.obs['_ontovae_categorical_covs'] = ndata.obs.loc[:,categorical_covariate_keys].apply(lambda x: pd.factorize(x)[0])      
 
     #if class_key is not None:
     #    ndata.obs['_ontovae_class'] = pd.factorize(ndata.obs.loc[:,class_key])[0]
@@ -147,7 +131,6 @@ def setup_anndata_ontovae(adata: AnnData,
             else:
                 classes = ['<DUM>'] + classes
             mapping = dict(zip(classes, np.arange(len(classes))))
-            mapping = {key: int(value) for key, value in mapping.items()}
             if cov_type[k] == 'combinatorial':
                 combos = ndata.obs.loc[:,k].unique()
                 cov_dict[k] = {}
@@ -171,12 +154,11 @@ def setup_anndata_ontovae(adata: AnnData,
 
     return ndata
 
-def setup_anndata_vanillavae(adata: AnnData,
-                batch_key: Optional[str] = None,
-                labels_key: Optional[str] = None,
-                categorical_covariate_keys: Optional[list[str]] = None,
-                cobra_keys: Optional[list[str]] = None, 
-                layer: Optional[str] = None):
+def setup_anndata_vanillavae(
+        adata: AnnData,
+        cobra_keys: Optional[list[str]] = None, 
+        layer: Optional[str] = None
+        ):
     
     """
     Sets up anndata for the Vanilla VAE or adversarial VAE.
@@ -185,12 +167,6 @@ def setup_anndata_vanillavae(adata: AnnData,
     ----------
         adata
             Scanpy single-cell AnnData object
-        batch_key
-            Observation to be used as batch
-        labels_key
-            Observation containing the labels
-        categorical_covariate_keys
-            Observations to use as covariate keys
         cobra_keys
             Observations to use for disentanglement of latent space (only for advVAE)
         layer
@@ -198,7 +174,7 @@ def setup_anndata_vanillavae(adata: AnnData,
 
     Returns
     -------
-        ndata
+        adata
             updated object if copy is True
     """
 
@@ -213,19 +189,6 @@ def setup_anndata_vanillavae(adata: AnnData,
     if len(list(adata.layers.keys())) > 0:
         for k in list(adata.layers.keys()):
             del adata.layers[k]
-
-    if batch_key is not None:
-        adata.obs['_ontovae_batch'] = pd.factorize(adata.obs.loc[:,batch_key])[0]
-    else:
-        adata.obs['_ontovae_batch'] = 0
-    
-    if labels_key is not None:
-        adata.obs['_ontovae_labels'] = pd.factorize(adata.obs.loc[:,labels_key])[0]
-    else:
-        adata.obs['_ontovae_labels'] = 0
-
-    if categorical_covariate_keys is not None:
-        adata.obs['_ontovae_categorical_covs'] = adata.obs.loc[:,categorical_covariate_keys].apply(lambda x: pd.factorize(x)[0])      
     
     if cobra_keys is not None:
          adata.obsm['_cobra_categorical_covs'] = adata.obs.loc[:,cobra_keys].apply(lambda x: pd.factorize(x)[0])
@@ -243,7 +206,10 @@ def split_adata(adata: AnnData, train_size: float = 0.9, seed: int = 42):
     X_val_ind = indices[round(len(indices)*train_size):]
     train_adata = adata[X_train_ind,:].copy()
     val_adata = adata[X_val_ind,:].copy() 
-    return train_adata, val_adata
+    return {
+        'train_adata': train_adata, 
+        'val_adata' : val_adata
+    }
 
 
 
