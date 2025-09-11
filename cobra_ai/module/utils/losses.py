@@ -6,7 +6,7 @@ import torch.nn.functional as F
 
 class KL_Divergence(nn.Module):
     """
-    Computes the Kullback-Leibler divergence between two distributions.
+    Computes the Kullback-Leibler divergence between two distributions (averaged over minibatch).
     adapted from: https://github.com/nilsmechtel/PELICAN/blob/main/models/utils/losses.py
     """
     def __init__(self):
@@ -62,7 +62,7 @@ class KL_Divergence(nn.Module):
 
 class MSE_Loss(nn.Module):
     """
-    Computes the Mean Squared Error (MSE) loss.
+    Computes the Mean Squared Error (MSE) loss (averaged over minibatch).
     """
     def __init__(self):
         super().__init__()
@@ -96,7 +96,7 @@ class MSE_Loss(nn.Module):
         torch.Tensor
             MSE loss.
         """
-        mse_loss = torch.mean(F.mse_loss(x_hat, x, reduction="sum")) # sum over features and average over minibatch
+        mse_loss = torch.mean(torch.sum(F.mse_loss(x_hat, x, reduction="none"), dim=1)) # sum over features and average over minibatch
         if run is not None:
             run[log_prefix + "/metrics/" + mode + "/mse_loss"].log(mse_loss)
         return mse_loss
