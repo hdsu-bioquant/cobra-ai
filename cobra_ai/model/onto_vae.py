@@ -114,7 +114,7 @@ class OntoVAE(nn.Module):
                  use_layer_norm_dec: Tunable[bool] = False,
                  use_activation_dec: Tunable[bool] = True,
                  use_activation_lat: Tunable[bool] = False,
-                 activation_fn_dec: Tunable[nn.Module] = nn.Tanh,
+                 activation_fn_dec: Tunable[nn.Module] = nn.ReLU,
                  rec_activation: nn.Module = None,
                  bias_dec: Tunable[bool] = True,
                  inject_covariates_dec: Tunable[bool] = False,
