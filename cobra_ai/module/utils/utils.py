@@ -377,7 +377,7 @@ def calculate_auc(adata: AnnData, X: np.array, y: np.array, n_splits: int=10):
             # append to list
             aucs.append(auc)
 
-        return np.nanmedian(np.array(auc))
+        return np.nanmedian(np.array(aucs))
     
     auc = [cross_val_auc(X[:,i].reshape(-1,1), y) for i in range(X.shape[1])]
     annot = adata.uns['_ontovae']['annot'].copy()
