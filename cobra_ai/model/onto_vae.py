@@ -324,7 +324,7 @@ class OntoVAE(nn.Module):
         for i, minibatch in tqdm(enumerate(dataloader), total=len(dataloader)):
 
             # move minibatch to device
-            data = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
+            data = minibatch[0].to(self.device)
             cat_list = torch.split(minibatch[1].T.to(self.device), 1)
             optimizer.zero_grad()
 
@@ -377,7 +377,7 @@ class OntoVAE(nn.Module):
         for i, minibatch in tqdm(enumerate(dataloader), total=len(dataloader)):
 
             # move minibatch to device
-            data = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
+            data = minibatch[0].to(self.device)
             cat_list = torch.split(minibatch[1].T.to(self.device), 1)
 
             # forward step
@@ -470,11 +470,11 @@ class OntoVAE(nn.Module):
         val_covs = self._cov_tensor(val_adata)
 
         # generate dataloaders
-        trainloader = FastTensorDataLoader(train_adata.X, 
+        trainloader = FastTensorDataLoader(torch.tensor(train_adata.X.todense(), dtype=torch.float32), 
                                            train_covs,
                                          batch_size=batch_size, 
                                          shuffle=True)
-        valloader = FastTensorDataLoader(val_adata.X, 
+        valloader = FastTensorDataLoader(torch.tensor(val_adata.X.todense(), dtype=torch.float32), 
                                          val_covs,
                                         batch_size=batch_size, 
                                         shuffle=False)
@@ -505,7 +505,7 @@ class OntoVAE(nn.Module):
                 if early_stopper.early_stop(val_epoch_loss):
                     break
 
-            train.report({"validation_loss": val_epoch_loss})
+            #train.report({"validation_loss": val_epoch_loss})
 
             if run is not None:
                 run["metrics/train/loss"].log(train_epoch_loss)
@@ -606,14 +606,14 @@ class OntoVAE(nn.Module):
 
         covs = self._cov_tensor(adata)
 
-        dataloader = FastTensorDataLoader(adata.X, 
+        dataloader = FastTensorDataLoader(torch.tensor(adata.X.todense(), dtype=torch.float32),
                                           covs,
                                          batch_size=128, 
                                          shuffle=False)
 
         res = []
         for minibatch in dataloader:
-            x = torch.tensor(minibatch[0].todense(), dtype=torch.float32).to(self.device)
+            x = minibatch[0].to(self.device)
             cat_list = torch.split(minibatch[1].T.to(self.device), 1)
             if retrieve == 'latent':
                 result, _, _ = self._get_embedding(x, cat_list)
