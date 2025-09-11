@@ -15,6 +15,7 @@ import warnings
 
 from scipy.sparse import csr_matrix
 import scanpy as sc
+import anndata as ad
 from anndata import AnnData
 
 import matplotlib.pyplot as plt
@@ -597,7 +598,7 @@ class BaseVAE(nn.Module, ABC):
             modelpath = modelpath,
             log_prefix = log_prefix,
             run = run
-            )
+           )
 
         # generate dataloaders
         trainloader, valloader = self._create_dataloaders(
