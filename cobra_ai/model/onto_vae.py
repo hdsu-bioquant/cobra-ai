@@ -103,7 +103,7 @@ class OntoVAE(nn.Module):
                  use_activation_enc: Tunable[bool] = True,
                  activation_fn_enc: Tunable[nn.Module] = nn.ReLU,
                  bias_enc: Tunable[bool] = True,
-                 hidden_layers_enc: Tunable[int]=3, 
+                 hidden_layers_enc: Tunable[int]=2, 
                  inject_covariates_enc: Tunable[bool] = False,
                  drop_enc: Tunable[float] = 0.2, 
                  z_drop: Tunable[float] = 0.5,
