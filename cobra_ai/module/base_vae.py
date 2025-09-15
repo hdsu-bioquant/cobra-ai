@@ -372,7 +372,6 @@ class BaseVAE(nn.Module, ABC):
                 log_prefix=log_prefix,
                 run=run
                 )
-            
             running_loss += loss.item()
 
             # update weights
@@ -468,7 +467,7 @@ class BaseVAE(nn.Module, ABC):
         return {
             'val_loss_vae': val_loss
         }
-    
+       
 
     def fit(
             self, 
@@ -831,8 +830,8 @@ class BaseVAE(nn.Module, ABC):
         """
         # VAE optimizer
         vae_params = [
-            self.encoder.encoder.parameters(),
-            self.decoder.decoder.parameters()
+            self.encoder.parameters(),
+            self.decoder.parameters()
         ]
         if self.model == 'cobra':
             vae_params.append(self.covars_embeddings.parameters())
@@ -1266,7 +1265,11 @@ class BaseVAE(nn.Module, ABC):
         """
 
         res = pd.DataFrame(res, index=adata.obs_names)
-        res.columns = self.onto_annot['ID'].tolist()
+        if embedding_type == 'latent_space':
+            self.onto_annot[self.onto_annot.depth == 0].ID.tolist()
+        else:
+            res.columns = self.onto_annot['ID'].tolist() 
+
         adata.obsm[embedding_type] = res
         return adata
 
