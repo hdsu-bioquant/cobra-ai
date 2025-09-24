@@ -155,7 +155,11 @@ def plot_scatter(adata: AnnData, color_by: list, act, term1: str, term2: str):
 
 """Classification based on pathway activities"""
 
-def calculate_auc(adata: AnnData, X: np.array, y: np.array, n_splits: int=10):
+def calculate_auc(
+        adata: AnnData, 
+        group: str, 
+        n_splits: int=10
+        ):
     """
     Performs sample classification on pathway activities using k-fold cross validation 
     and outputs the ontology annotation with an additional column 'auc' 
@@ -164,14 +168,21 @@ def calculate_auc(adata: AnnData, X: np.array, y: np.array, n_splits: int=10):
     Parameters
     ----------
     adata
-        anndata that was used to calculate the pathway activities
-    X
-        2D numpy array of pathway activities
-    y
-        1D numpy array of binary class labels
+        anndata with calculated pathway activities
+    group
+        covariate in adata.obs to use as class labels
     n_splits
         how many splits to use for cross-validation
     """
+
+    if 'pathway_activities' not in adata.obsm.keys():
+            raise ValueError('Please run model.get_pathway_activities first.')
+    if len(adata.obs[group].unique()) != 2:
+            raise ValueError('Please provide a binary group variable.')
+    
+    levels = adata.obs[group].unique().tolist()
+    y = np.array([1 if i == levels[1] else 0 for i in adata.obs[group]])
+    X = adata.obsm['pathway_activities'].to_numpy()
 
     def cross_val_auc(X, y, n_splits=n_splits):
         # initialize aucs list
@@ -201,9 +212,11 @@ def calculate_auc(adata: AnnData, X: np.array, y: np.array, n_splits: int=10):
         return np.nanmedian(np.array(aucs))
     
     auc = [cross_val_auc(X[:,i].reshape(-1,1), y) for i in range(X.shape[1])]
-    annot = adata.uns['_ontovae']['annot'].copy()
-    annot['auc'] = auc
-    return annot
+    result = pd.DataFrame({
+        'ID': adata.obsm['pathway_activities'].columns.tolist(),
+        'auc': auc
+        })
+    return result
 
 
 
