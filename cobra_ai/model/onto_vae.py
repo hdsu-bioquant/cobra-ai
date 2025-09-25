@@ -320,6 +320,10 @@ class OntoVAE(BaseVAE):
         else:
             genes = self.onto_features
 
+        # raise error if no input genes are found
+        if len([g for g in adata.var_names if g in genes]) == 0:
+            raise ValueError("No input gene could be mapped to the ontology. Please check if you are using the correct gene identifiers.")
+
         # split adata into target and additional genes
         adata_target = adata[:,adata.var_names.isin(genes)].copy()
         adata_add = adata[:, ~adata.var_names.isin(genes)].copy()
